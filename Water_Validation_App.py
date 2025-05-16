@@ -9,7 +9,7 @@ import os
 st.set_page_config(layout="wide")
 st.title("🧪 Water Quality Data Validation App")
 
-# ==== تب‌ها ====
+# ==== Tabs ====
 tabs = st.tabs([
     "📁 Upload File",
     "1️⃣ GENERAL Validation",
@@ -23,22 +23,22 @@ tabs = st.tabs([
 # ------------------------ 1. Upload Tab ------------------------
 with tabs[0]:
     st.header("📁 Upload Your Excel File")
-    uploaded_file = st.file_uploader("لطفاً فایل Excel را آپلود کنید:", type=["xlsx"])
+    uploaded_file = st.file_uploader("Please upload your Excel file:", type=["xlsx"])
 
     if uploaded_file:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
             tmp.write(uploaded_file.read())
             input_path = tmp.name
-        st.success("✅ فایل با موفقیت بارگذاری شد. حالا می‌توانید تب‌های بعدی را اجرا کنید.")
+        st.success("✅ File uploaded successfully. You can now proceed to the next tabs.")
     else:
-        st.warning("برای ادامه، ابتدا یک فایل Excel بارگذاری کنید.")
+        st.warning("To continue, please upload an Excel file.")
 
 # ------------------------ 2. GENERAL Validation Tab ------------------------
 with tabs[1]:
     st.header("1️⃣ GENERAL Validation")
 
     if uploaded_file:
-        run_button = st.button("✅ اجرای اعتبارسنجی GENERAL")
+        run_button = st.button("✅ Run GENERAL Validation")
         if run_button:
             df = pd.read_excel(input_path)
             df["ValidationNotes"] = ""
@@ -111,7 +111,7 @@ with tabs[1]:
 
             def time_check(t):
                 try:
-                    hour = int(str(t).split(":" )[0])
+                    hour = int(str(t).split(":")[0])
                     return not (hour < 12 or hour >= 16)
                 except:
                     return True
@@ -148,15 +148,15 @@ with tabs[1]:
             df_clean.to_excel(clean_path, index=False)
             df.to_excel(annotated_path, index=False)
 
-            st.success("✅ فایل‌های GENERAL ایجاد شدند.")
-            st.download_button("📥 دانلود فایل cleaned", data=open(clean_path, 'rb').read(), file_name="cleaned_GENERAL.xlsx")
-            st.download_button("📥 دانلود فایل annotated", data=open(annotated_path, 'rb').read(), file_name="annotated_GENERAL.xlsx")
+            st.success("✅ GENERAL files have been created.")
+            st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_GENERAL.xlsx")
+            st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_GENERAL.xlsx")
 
 # ------------------------ 3. CORE Validation Tab ------------------------
 with tabs[2]:
     st.header("2️⃣ CORE Validation")
 
-    uploaded_file_core = st.file_uploader("بارگذاری فایل cleaned_GENERAL.xlsx برای CORE", type=["xlsx"], key="core_upload")
+    uploaded_file_core = st.file_uploader("📂 Upload the cleaned_GENERAL.xlsx file for CORE Validation", type=["xlsx"], key="core_upload")
 
     if uploaded_file_core:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
@@ -167,7 +167,7 @@ with tabs[2]:
         df["CORE_Notes"] = ""
         df["CORE_ChangeNotes"] = ""
 
-        run_core = st.button("✅ اجرای اعتبارسنجی CORE")
+        run_core = st.button("✅ Run CORE Validation")
         if run_core:
             colors = {
                 "Sample Depth": "FFB6C1",
@@ -196,17 +196,17 @@ with tabs[2]:
                     sample = row["Sample Depth (meters)"]
                     total = row["Total Depth (meters)"]
                     if not (sample == 0.3 or np.isclose(sample, total / 2, atol=0.05)):
-                        df.at[idx, "CORE_Notes"] += "Sample Depth; "
+                        df.at[idx, "CORE_Notes"] += "Sample Depth not 0.3m or mid-depth; "
 
             if "Flow Severity" in df.columns and "Total Depth (meters)" in df.columns:
                 mask = (df["Total Depth (meters)"] == 0) & (df["Flow Severity"] != 6)
-                df.loc[mask, "CORE_Notes"] += "Zero Depth; "
+                df.loc[mask, "CORE_Notes"] += "Zero Depth with non-dry flow; "
 
             do1 = "Dissolved Oxygen (mg/L) 1st titration"
             do2 = "Dissolved Oxygen (mg/L) 2nd titration"
             if do1 in df.columns and do2 in df.columns:
                 diff = (df[do1] - df[do2]).abs()
-                df.loc[diff > 0.5, "CORE_Notes"] += "DO Difference; "
+                df.loc[diff > 0.5, "CORE_Notes"] += "DO Difference > 0.5; "
                 df["DO1 Rounded"] = df[do1].round(1)
                 df["DO2 Rounded"] = df[do2].round(1)
                 for idx in df.index:
@@ -226,7 +226,7 @@ with tabs[2]:
                 numeric_col = pd.to_numeric(df[secchi], errors="coerce").fillna(0)
                 if numeric_col.eq(0).all():
                     zeroed_columns.append(secchi)
-                df.loc[~df[secchi].apply(sig_figs), "CORE_Notes"] += "Secchi SigFig; "
+                df.loc[~df[secchi].apply(sig_figs), "CORE_Notes"] += "Secchi not 2 significant figures; "
                 df.loc[df[secchi] > df["Total Depth (meters)"], "CORE_Notes"] += "Secchi > Depth; "
 
             cond_col = "Conductivity (?S/cm)"
@@ -234,23 +234,23 @@ with tabs[2]:
                 cond = df[cond_col]
                 std = df["Standard Value"]
                 good = (cond >= 0.8 * std) & (cond <= 1.2 * std)
-                df.loc[~good, "CORE_Notes"] += "Conductivity ±20%; "
+                df.loc[~good, "CORE_Notes"] += "Conductivity outside ±20%; "
 
             if cond_col in df.columns:
                 df["TDS Calculated"] = df[cond_col] * 0.65
                 for idx in df.index:
-                    log_change("TDS", idx, df.at[idx, "TDS Calculated"], "Calculated")
+                    log_change("TDS", idx, df.at[idx, "TDS Calculated"], "Estimated TDS = Conductivity × 0.65")
 
             if "Sampling Time" in df.columns:
                 df["Sampling Time"] = pd.to_datetime(df["Sampling Time"], errors='coerce')
                 if "Post-Test Calibration" in df.columns:
                     df["Post-Test Calibration"] = pd.to_datetime(df["Post-Test Calibration"], errors='coerce')
                     delta = (df["Sampling Time"] - df["Post-Test Calibration"]).abs().dt.total_seconds() / 3600
-                    df.loc[delta > 24, "CORE_Notes"] += "Calibration Δt; "
+                    df.loc[delta > 24, "CORE_Notes"] += "Post-calibration >24h; "
                 if "Pre-Test Calibration" in df.columns:
                     df["Pre-Test Calibration"] = pd.to_datetime(df["Pre-Test Calibration"], errors='coerce')
                     delta = (df["Sampling Time"] - df["Pre-Test Calibration"]).abs().dt.total_seconds() / 3600
-                    df.loc[delta > 24, "CORE_Notes"] += "Pre-Cal Δt; "
+                    df.loc[delta > 24, "CORE_Notes"] += "Pre-calibration >24h; "
 
             if "pH (standard units)" in df.columns:
                 df["pH Rounded"] = df["pH (standard units)"].round(1)
@@ -270,7 +270,7 @@ with tabs[2]:
                     return float(val).is_integer()
 
             if cond_col in df.columns:
-                df.loc[~df[cond_col].apply(check_cond_format), "CORE_Notes"] += "Conductivity Format; "
+                df.loc[~df[cond_col].apply(check_cond_format), "CORE_Notes"] += "Conductivity format error; "
 
             def salinity_format(val):
                 if pd.isna(val): return ""
@@ -282,15 +282,15 @@ with tabs[2]:
             if "Salinity (ppt)" in df.columns:
                 df["Salinity Formatted"] = df["Salinity (ppt)"].apply(salinity_format)
                 for idx in df.index:
-                    log_change("Salinity", idx, df.at[idx, "Salinity Formatted"], "Formatted")
+                    log_change("Salinity", idx, df.at[idx, "Salinity Formatted"], "Formatted for display")
 
             if "Time Spent Sampling/Traveling" in df.columns:
                 non_minutes = df["Time Spent Sampling/Traveling"].apply(lambda x: not isinstance(x, (int, float, np.integer, np.floating)))
-                df.loc[non_minutes, "CORE_Notes"] += "Time Format; "
+                df.loc[non_minutes, "CORE_Notes"] += "Time format not numeric; "
 
             if "Roundtrip Distance Traveled" in df.columns:
                 non_miles = df["Roundtrip Distance Traveled"].apply(lambda x: not isinstance(x, (int, float, np.integer, np.floating)))
-                df.loc[non_miles, "CORE_Notes"] += "Distance Format; "
+                df.loc[non_miles, "CORE_Notes"] += "Distance format not numeric; "
 
             def has_real_issues(idx):
                 note = str(df.at[idx, "CORE_Notes"]).strip()
@@ -307,15 +307,16 @@ with tabs[2]:
             df_clean.to_excel(clean_path, index=False)
             df.to_excel(annotated_path, index=False)
 
-            st.success("✅ فایل‌های CORE ایجاد شدند.")
-            st.download_button("📥 دانلود فایل cleaned", data=open(clean_path, 'rb').read(), file_name="cleaned_CORE.xlsx")
-            st.download_button("📥 دانلود فایل annotated", data=open(annotated_path, 'rb').read(), file_name="annotated_CORE.xlsx")
+            st.success("✅ CORE validation files generated.")
+            st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_CORE.xlsx")
+            st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_CORE.xlsx")
+
 
 # ------------------------ 4. ECOLI Validation Tab ------------------------
 with tabs[3]:
     st.header("3️⃣ ECOLI Validation")
 
-    uploaded_file_ecoli = st.file_uploader("بارگذاری فایل cleaned_GENERAL.xlsx برای ECOLI", type=["xlsx"], key="ecoli_upload")
+    uploaded_file_ecoli = st.file_uploader("📂 Upload the cleaned_GENERAL.xlsx file for ECOLI Validation", type=["xlsx"], key="ecoli_upload")
 
     if uploaded_file_ecoli:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
@@ -326,7 +327,7 @@ with tabs[3]:
         df["ECOLI_ValidationNotes"] = ""
         df["ECOLI_ChangeNotes"] = ""
 
-        run_ecoli = st.button("✅ اجرای اعتبارسنجی ECOLI")
+        run_ecoli = st.button("✅ Run ECOLI Validation")
         if run_ecoli:
             all_zero_cols = [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col]) and (df[col].fillna(0) == 0).all()]
 
@@ -339,12 +340,12 @@ with tabs[3]:
             col_temp = "Incubation temperature is 33° C +/- 3° C"
             if col_temp in df.columns and col_temp not in all_zero_cols:
                 df[col_temp] = pd.to_numeric(df[col_temp], errors="coerce")
-                df.loc[(df[col_temp] < 30) | (df[col_temp] > 36), "ECOLI_ValidationNotes"] += "Incubation temp not 30–36°C; "
+                df.loc[(df[col_temp] < 30) | (df[col_temp] > 36), "ECOLI_ValidationNotes"] += "Incubation temperature not in 30–36°C range; "
 
             col_time = "Incubation time is between 28-31 hours"
             if col_time in df.columns and col_time not in all_zero_cols:
                 df[col_time] = pd.to_numeric(df[col_time], errors="coerce")
-                df.loc[(df[col_time] < 28) | (df[col_time] > 31), "ECOLI_ValidationNotes"] += "Incubation time not 28–31h; "
+                df.loc[(df[col_time] < 28) | (df[col_time] > 31), "ECOLI_ValidationNotes"] += "Incubation time not in 28–31h range; "
 
             for col in ["Sample 1: Colonies Counted", "Sample 2: Colonies Counted"]:
                 if col in df.columns and col not in all_zero_cols:
@@ -353,7 +354,7 @@ with tabs[3]:
             col_blank = "No colony growth on Field Blank"
             if col_blank in df.columns and col_blank not in all_zero_cols:
                 bad_blank = df[col_blank].astype(str).str.lower().isin(["no", "false", "n"])
-                df.loc[bad_blank, "ECOLI_ValidationNotes"] += "Colony growth on field blank; "
+                df.loc[bad_blank, "ECOLI_ValidationNotes"] += "Colony growth detected in field blank; "
 
             col_ecoli = "E. Coli Average"
             if col_ecoli in df.columns:
@@ -377,7 +378,7 @@ with tabs[3]:
                     orig = df.at[idx, col_ecoli]
                     rounded = df.at[idx, "E. Coli Rounded (2SF)"]
                     if not pd.isna(orig) and not pd.isna(rounded):
-                        log_change(idx, f"E. coli {orig} → {rounded} (rounded to 2 SF)")
+                        log_change(idx, f"E. coli {orig} → {rounded} (rounded to 2 significant figures)")
 
             def check_dilution(row, prefix):
                 try:
@@ -395,7 +396,7 @@ with tabs[3]:
                         f"{prefix}: Sample Size (mL)", f"{prefix}: Colony Forming Units per 100mL"]
                 if all(c in df.columns and c not in all_zero_cols for c in cols):
                     valid = df.apply(lambda row: check_dilution(row, prefix), axis=1)
-                    df.loc[~valid, "ECOLI_ValidationNotes"] += f"{prefix} CFU mismatch; "
+                    df.loc[~valid, "ECOLI_ValidationNotes"] += f"{prefix} CFU formula mismatch; "
 
             df_clean = df[df["ECOLI_ValidationNotes"] == ""]
 
@@ -417,15 +418,16 @@ with tabs[3]:
 
             wb.save(annotated_path)
 
-            st.success("✅ فایل‌های ECOLI ایجاد شدند.")
-            st.download_button("📥 دانلود فایل cleaned", data=open(clean_path, 'rb').read(), file_name="cleaned_ECOLI.xlsx")
-            st.download_button("📥 دانلود فایل annotated", data=open(annotated_path, 'rb').read(), file_name="annotated_ECOLI.xlsx")
+            st.success("✅ ECOLI validation files generated.")
+            st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_ECOLI.xlsx")
+            st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_ECOLI.xlsx")
+
 
 # ------------------------ 5. ADVANCED Validation Tab ------------------------
 with tabs[4]:
     st.header("4️⃣ ADVANCED Validation")
 
-    uploaded_file_adv = st.file_uploader("بارگذاری فایل cleaned_GENERAL_cleaned_ECOLI.xlsx برای ADVANCED", type=["xlsx"], key="adv_upload")
+    uploaded_file_adv = st.file_uploader("📂 Upload the cleaned_GENERAL_cleaned_ECOLI.xlsx file for ADVANCED Validation", type=["xlsx"], key="adv_upload")
 
     if uploaded_file_adv:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
@@ -436,7 +438,7 @@ with tabs[4]:
         df["ADVANCED_ValidationNotes"] = ""
         df["ADVANCED_ChangeNotes"] = ""
 
-        run_adv = st.button("✅ اجرای اعتبارسنجی ADVANCED")
+        run_adv = st.button("✅ Run ADVANCED Validation")
         if run_adv:
             all_zero_cols = [
                 col for col in df.columns
@@ -540,14 +542,15 @@ with tabs[4]:
 
             wb.save(annotated_path)
 
-            st.success("✅ فایل‌های ADVANCED ایجاد شدند.")
-            st.download_button("📥 دانلود فایل cleaned", data=open(clean_path, 'rb').read(), file_name="cleaned_ADVANCED.xlsx")
-            st.download_button("📥 دانلود فایل annotated", data=open(annotated_path, 'rb').read(), file_name="annotated_ADVANCED.xlsx")
+            st.success("✅ ADVANCED validation files generated.")
+            st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_ADVANCED.xlsx")
+            st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_ADVANCED.xlsx")
+
 # ------------------------ 6. RIPARIAN Validation Tab ------------------------
 with tabs[5]:
     st.header("5️⃣ RIPARIAN Validation")
 
-    uploaded_file_rip = st.file_uploader("بارگذاری فایل cleaned_GENERAL_cleaned_ECOLI_cleaned_ADVANCED.xlsx برای RIPARIAN", type=["xlsx"], key="rip_upload")
+    uploaded_file_rip = st.file_uploader("📂 Upload the cleaned_GENERAL_cleaned_ECOLI_cleaned_ADVANCED.xlsx file for RIPARIAN Validation", type=["xlsx"], key="rip_upload")
 
     if uploaded_file_rip:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
@@ -558,7 +561,7 @@ with tabs[5]:
         df["RIPARIAN_ValidationNotes"] = ""
         df["RIPARIAN_ChangeNotes"] = ""
 
-        run_rip = st.button("✅ اجرای اعتبارسنجی RIPARIAN")
+        run_rip = st.button("✅ Run RIPARIAN Validation")
         if run_rip:
             def log_change(idx, msg):
                 df.at[idx, "RIPARIAN_ChangeNotes"] += msg + "; "
@@ -642,35 +645,35 @@ with tabs[5]:
 
             wb.save(annotated_path)
 
-            st.success("✅ فایل‌های RIPARIAN ایجاد شدند.")
-            st.download_button("📥 دانلود فایل cleaned", data=open(clean_path, 'rb').read(), file_name="cleaned_RIPARIAN.xlsx")
-            st.download_button("📥 دانلود فایل annotated", data=open(annotated_path, 'rb').read(), file_name="annotated_RIPARIAN.xlsx")
+            st.success("✅ RIPARIAN validation files generated.")
+            st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_RIPARIAN.xlsx")
+            st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_RIPARIAN.xlsx")
 
-
+# ------------------------ 7. Final Output Tab ------------------------
 # ------------------------ 7. Final Output Tab ------------------------
 with tabs[6]:
     st.header("📦 Final Output")
 
-    st.markdown("در این بخش می‌توانید همه فایل‌های cleaned و annotated تولیدشده در مراحل قبل را بارگذاری و با هم ادغام کنید.")
+    st.markdown("Upload all cleaned and annotated files from the previous validation steps and merge them into final outputs.")
 
-    uploaded_general_cleaned = st.file_uploader("📂 فایل cleaned GENERAL", type=["xlsx"], key="final_general_cleaned")
-    uploaded_core_cleaned = st.file_uploader("📂 فایل cleaned CORE", type=["xlsx"], key="final_core_cleaned")
-    uploaded_ecoli_cleaned = st.file_uploader("📂 فایل cleaned ECOLI", type=["xlsx"], key="final_ecoli_cleaned")
-    uploaded_advanced_cleaned = st.file_uploader("📂 فایل cleaned ADVANCED", type=["xlsx"], key="final_advanced_cleaned")
-    uploaded_riparian_cleaned = st.file_uploader("📂 فایل cleaned RIPARIAN", type=["xlsx"], key="final_riparian_cleaned")
+    uploaded_general_cleaned = st.file_uploader("📂 Cleaned GENERAL file", type=["xlsx"], key="final_general_cleaned")
+    uploaded_core_cleaned = st.file_uploader("📂 Cleaned CORE file", type=["xlsx"], key="final_core_cleaned")
+    uploaded_ecoli_cleaned = st.file_uploader("📂 Cleaned ECOLI file", type=["xlsx"], key="final_ecoli_cleaned")
+    uploaded_advanced_cleaned = st.file_uploader("📂 Cleaned ADVANCED file", type=["xlsx"], key="final_advanced_cleaned")
+    uploaded_riparian_cleaned = st.file_uploader("📂 Cleaned RIPARIAN file", type=["xlsx"], key="final_riparian_cleaned")
 
-    uploaded_general_annotated = st.file_uploader("📂 فایل annotated GENERAL", type=["xlsx"], key="final_general_annotated")
-    uploaded_core_annotated = st.file_uploader("📂 فایل annotated CORE", type=["xlsx"], key="final_core_annotated")
-    uploaded_ecoli_annotated = st.file_uploader("📂 فایل annotated ECOLI", type=["xlsx"], key="final_ecoli_annotated")
-    uploaded_advanced_annotated = st.file_uploader("📂 فایل annotated ADVANCED", type=["xlsx"], key="final_advanced_annotated")
-    uploaded_riparian_annotated = st.file_uploader("📂 فایل annotated RIPARIAN", type=["xlsx"], key="final_riparian_annotated")
+    uploaded_general_annotated = st.file_uploader("📂 Annotated GENERAL file", type=["xlsx"], key="final_general_annotated")
+    uploaded_core_annotated = st.file_uploader("📂 Annotated CORE file", type=["xlsx"], key="final_core_annotated")
+    uploaded_ecoli_annotated = st.file_uploader("📂 Annotated ECOLI file", type=["xlsx"], key="final_ecoli_annotated")
+    uploaded_advanced_annotated = st.file_uploader("📂 Annotated ADVANCED file", type=["xlsx"], key="final_advanced_annotated")
+    uploaded_riparian_annotated = st.file_uploader("📂 Annotated RIPARIAN file", type=["xlsx"], key="final_riparian_annotated")
 
-    if st.button("🌀 ترکیب و ساخت فایل نهایی"):
+    if st.button("🌀 Merge and Generate Final Output"):
         cleaned_files = [uploaded_general_cleaned, uploaded_core_cleaned, uploaded_ecoli_cleaned, uploaded_advanced_cleaned, uploaded_riparian_cleaned]
         annotated_files = [uploaded_general_annotated, uploaded_core_annotated, uploaded_ecoli_annotated, uploaded_advanced_annotated, uploaded_riparian_annotated]
 
         if not all(cleaned_files + annotated_files):
-            st.error("⛔ لطفاً تمام فایل‌های cleaned و annotated را بارگذاری کنید.")
+            st.error("⛔ Please upload all cleaned and annotated files before proceeding.")
         else:
             try:
                 from functools import reduce
@@ -686,8 +689,8 @@ with tabs[6]:
                 df_final_cleaned.to_excel(cleaned_path, index=False)
                 df_final_annotated.to_excel(annotated_path, index=False)
 
-                st.success("✅ فایل‌های نهایی ترکیب‌شده ساخته شدند!")
-                st.download_button("📥 دانلود فایل cleaned", data=open(cleaned_path, 'rb').read(), file_name="final_cleaned_validated_output.xlsx")
-                st.download_button("📥 دانلود فایل annotated", data=open(annotated_path, 'rb').read(), file_name="final_annotated_validated_output.xlsx")
+                st.success("✅ Final merged files have been generated successfully!")
+                st.download_button("📥 Download final cleaned file", data=open(cleaned_path, 'rb').read(), file_name="final_cleaned_validated_output.xlsx")
+                st.download_button("📥 Download final annotated file", data=open(annotated_path, 'rb').read(), file_name="final_annotated_validated_output.xlsx")
             except Exception as e:
-                st.error(f"❌ خطا در ترکیب فایل‌ها: {e}")
+                st.error(f"❌ Error while merging files: {e}")
