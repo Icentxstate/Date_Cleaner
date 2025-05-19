@@ -196,70 +196,120 @@ with tabs[2]:
 
         run_core = st.button("✅ Run CORE Validation")
         if run_core:
+            row_delete_indices = set()
+            core_columns = [
+                "Sample Depth (meters)", "Total Depth (meters)",
+                "Dissolved Oxygen (mg/L) 1st titration", "Dissolved Oxygen (mg/L) 2nd titration",
+                "Secchi Disk Transparency - Average", "Conductivity (?S/cm)",
+                "Standard Value", "Chemical Reagents Used"
+            ]
+
             def log_change(col, idx, new_val, reason):
                 df.at[idx, "CORE_ChangeNotes"] += f"{col} → {new_val} ({reason}); "
 
-            colors = {
-                "Conductivity ±20%": "FFFF00",  # Yellow for conductivity calibration issue
-            }
+            # Sample depth validation
+            if "Sample Depth (meters)" in df.columns and "Total Depth (meters)" in df.columns:
+                for idx, row in df.iterrows():
+                    sample = row["Sample Depth (meters)"]
+                    total = row["Total Depth (meters)"]
+                    if not (sample == 0.3 or np.isclose(sample, total / 2, atol=0.05)):
+                        df.at[idx, "CORE_Notes"] += "Sample Depth not 0.3m or mid-depth; "
 
-            # Validation logic (shortened for brevity — assume the rest of your validation code is here)
-            if "Conductivity (?S/cm)" in df.columns and "Standard Value" in df.columns:
-                cond_col = "Conductivity (?S/cm)"
+            # Flow severity vs depth = 0
+            if "Flow Severity" in df.columns and "Total Depth (meters)" in df.columns:
+                mask = (df["Total Depth (meters)"] == 0) & (df["Flow Severity"] != 6)
+                df.loc[mask, "CORE_Notes"] += "Zero Depth with non-dry flow; "
+                row_delete_indices.update(df[mask].index.tolist())
+
+            # DO titration difference > 0.5
+            do1 = "Dissolved Oxygen (mg/L) 1st titration"
+            do2 = "Dissolved Oxygen (mg/L) 2nd titration"
+            if do1 in df.columns and do2 in df.columns:
+                diff = (df[do1] - df[do2]).abs()
+                mask = diff > 0.5
+                df.loc[mask, "CORE_Notes"] += "DO Difference > 0.5; "
+                df["DO1 Rounded"] = df[do1].round(1)
+                df["DO2 Rounded"] = df[do2].round(1)
+                for idx in df.index:
+                    log_change("DO1", idx, df.at[idx, "DO1 Rounded"], "Rounded to 0.1")
+                    log_change("DO2", idx, df.at[idx, "DO2 Rounded"], "Rounded to 0.1")
+
+            # Secchi Disk significant figures and comparison to depth
+            secchi = "Secchi Disk Transparency - Average"
+            zeroed_columns = []
+            if secchi in df.columns:
+                numeric_col = pd.to_numeric(df[secchi], errors="coerce").fillna(0)
+                if numeric_col.eq(0).all():
+                    zeroed_columns.append(secchi)
+                df.loc[~df[secchi].apply(lambda v: len(str(v).replace(".", "").lstrip("0")) <= 2), "CORE_Notes"] += "Secchi not 2 significant figures; "
+                df.loc[df[secchi] > df["Total Depth (meters)"], "CORE_Notes"] += "Secchi > Depth; "
+
+            # Conductivity validation ±20% of Standard Value
+            cond_col = "Conductivity (?S/cm)"
+            if cond_col in df.columns and "Standard Value" in df.columns:
                 cond = df[cond_col]
                 std = df["Standard Value"]
                 good = (cond >= 0.8 * std) & (cond <= 1.2 * std)
                 df.loc[~good, "CORE_Notes"] += "Conductivity outside ±20%; "
+                df.loc[~good, cond_col] = np.nan
 
-            # Simulated other validation logic...
-            # (DO, Secchi, Sampling Time, pH, Temp, etc.)
+            # Estimated TDS
+            if cond_col in df.columns:
+                df["TDS Calculated"] = df[cond_col] * 0.65
+                for idx in df.index:
+                    log_change("TDS", idx, df.at[idx, "TDS Calculated"], "Estimated TDS = Conductivity × 0.65")
 
-            # Remove rows with real validation issues
-            def has_real_issues(idx):
-                note = str(df.at[idx, "CORE_Notes"]).strip()
-                return note != ""
+            # Calibration date-time difference > 24h
+            if "Sampling Time" in df.columns:
+                df["Sampling Time"] = pd.to_datetime(df["Sampling Time"], errors='coerce')
+                if "Post-Test Calibration" in df.columns:
+                    df["Post-Test Calibration"] = pd.to_datetime(df["Post-Test Calibration"], errors='coerce')
+                    delta = (df["Sampling Time"] - df["Post-Test Calibration"]).abs().dt.total_seconds() / 3600
+                    df.loc[delta > 24, "CORE_Notes"] += "Post-calibration >24h; "
+                if "Pre-Test Calibration" in df.columns:
+                    df["Pre-Test Calibration"] = pd.to_datetime(df["Pre-Test Calibration"], errors='coerce')
+                    delta = (df["Sampling Time"] - df["Pre-Test Calibration"]).abs().dt.total_seconds() / 3600
+                    df.loc[delta > 24, "CORE_Notes"] += "Pre-calibration >24h; "
 
-            df_clean = df[[has_real_issues(idx) for idx in df.index]]
+            # Rounding pH and Temp
+            if "pH (standard units)" in df.columns:
+                df["pH Rounded"] = df["pH (standard units)"].round(1)
+                for idx in df.index:
+                    log_change("pH", idx, df.at[idx, "pH Rounded"], "Rounded to 0.1")
+            if "Water Temperature (° C)" in df.columns:
+                df["Water Temp Rounded"] = df["Water Temperature (° C)"].round(1)
+                for idx in df.index:
+                    log_change("Temp", idx, df.at[idx, "Water Temp Rounded"], "Rounded to 0.1")
 
-            # Save cleaned and annotated outputs
+            # Format validations
+            if cond_col in df.columns:
+                df.loc[~df[cond_col].apply(lambda val: len(str(int(round(val)))) <= 3 if val > 100 else float(val).is_integer()), "CORE_Notes"] += "Conductivity format error; "
+
+            if "Salinity (ppt)" in df.columns:
+                df["Salinity Formatted"] = df["Salinity (ppt)"].apply(lambda val: "< 2.0" if val < 2.0 else round(val, 1) if pd.notna(val) else "")
+                for idx in df.index:
+                    log_change("Salinity", idx, df.at[idx, "Salinity Formatted"], "Formatted for display")
+
+            if "Time Spent Sampling/Traveling" in df.columns:
+                mask = ~df["Time Spent Sampling/Traveling"].apply(lambda x: isinstance(x, (int, float, np.integer, np.floating)))
+                df.loc[mask, "CORE_Notes"] += "Time format not numeric; "
+
+            if "Roundtrip Distance Traveled" in df.columns:
+                mask = ~df["Roundtrip Distance Traveled"].apply(lambda x: isinstance(x, (int, float, np.integer, np.floating)))
+                df.loc[mask, "CORE_Notes"] += "Distance format not numeric; "
+
+            # حذف کامل ردیف‌هایی که باید حذف بشن (بر اساس شرایط خاص)
+            df_clean = df.drop(index=row_delete_indices)
+
             clean_path = input_path.replace(".xlsx", "_cleaned_CORE.xlsx")
             annotated_path = input_path.replace(".xlsx", "_annotated_CORE.xlsx")
             df_clean.to_excel(clean_path, index=False)
             df.to_excel(annotated_path, index=False)
 
-            # ---------------------- ایجاد فایل بدون حذف Conductivity خارج از ±20% ----------------------
-            df_cond_format = df.copy()
-            yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-            nocond_path = input_path.replace(".xlsx", "_noConductivityCalibrationRemoved.xlsx")
-            df_cond_format.to_excel(nocond_path, index=False)
-
-            wb = load_workbook(nocond_path)
-            ws = wb.active
-            header = [cell.value for cell in ws[1]]
-            try:
-                cond_idx = header.index("Conductivity (?S/cm)") + 1
-                std_idx = header.index("Standard Value") + 1
-                notes_idx = header.index("CORE_Notes") + 1
-
-                for row in range(2, ws.max_row + 1):
-                    cond = ws.cell(row, cond_idx).value
-                    std = ws.cell(row, std_idx).value
-                    if cond is not None and std is not None:
-                        if not (0.8 * std <= cond <= 1.2 * std):
-                            ws.cell(row, cond_idx).fill = yellow_fill
-                            existing_note = ws.cell(row, notes_idx).value or ""
-                            if "Conductivity calibration is not considered" not in existing_note:
-                                ws.cell(row, notes_idx).value = existing_note + "; Conductivity calibration is not considered"
-            except:
-                pass
-
-            wb.save(nocond_path)
-
-            # ---------------------- دکمه‌های دانلود ----------------------
             st.success("✅ CORE validation files generated.")
             st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_CORE.xlsx")
             st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_CORE.xlsx")
-            st.download_button("📥 Download file (Conductivity calibration NOT removed)", data=open(nocond_path, 'rb').read(), file_name="noConductivityCalibrationRemoved.xlsx")
+
 
 # ------------------------ 4. ECOLI Validation Tab ------------------------
 with tabs[3]:
