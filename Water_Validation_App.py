@@ -34,11 +34,6 @@ with tabs[0]:
         st.warning("To continue, please upload an Excel file.")
 
 # ------------------------ 2. GENERAL Validation Tab ------------------------
-
-python
-Copy
-Edit
-# ------------------------ 2. GENERAL Validation Tab ------------------------
 with tabs[1]:
     st.header("1️⃣ GENERAL Validation")
 
