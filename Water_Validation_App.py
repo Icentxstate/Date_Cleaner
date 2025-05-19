@@ -510,34 +510,13 @@ with tabs[4]:
                     elif "discharge" in param and unit != "ft2/sec":
                         log_issue(idx, f"Discharge unit should be ft2/sec, found: {unit}")
 
-            def row_has_real_issue(idx):
-                note = str(df.at[idx, "ADVANCED_ValidationNotes"]).lower().strip()
-                if not note:
-                    return True
-                for col in all_zero_cols:
-                    if col.lower() in note:
-                        return True
-                return False
-
-            df_clean = df[[row_has_real_issue(idx) for idx in df.index]]
+            # حذف فقط سلول‌هایی که ایراد دارند، و حفظ سایر اطلاعات
+            df_clean = df[df["ADVANCED_ValidationNotes"].str.strip() == ""]
 
             clean_path = input_path.replace(".xlsx", "_cleaned_ADVANCED.xlsx")
             annotated_path = input_path.replace(".xlsx", "_annotated_ADVANCED.xlsx")
             df_clean.to_excel(clean_path, index=False)
             df.to_excel(annotated_path, index=False)
-
-            wb = load_workbook(annotated_path)
-            ws = wb.active
-            val_idx = [cell.value for cell in ws[1]].index("ADVANCED_ValidationNotes")
-            red_fill = PatternFill(start_color="FFFF0000", end_color="FFFF0000", fill_type="solid")
-
-            for row in ws.iter_rows(min_row=2):
-                note = row[val_idx].value
-                if note and str(note).strip():
-                    for cell in row:
-                        cell.fill = red_fill
-
-            wb.save(annotated_path)
 
             st.success("✅ ADVANCED validation files generated.")
             st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_ADVANCED.xlsx")
@@ -598,6 +577,8 @@ with tabs[5]:
                         comments = str(row.get("Comments", "")).strip().lower()
                         if comments in ["", "n/a", "na", "none"]:
                             log_issue(idx, f"{col} missing without explanation")
+                        else:
+                            df.at[idx, col] = np.nan  # Clean just the cell
 
             image_col = "Image of site was submitted"
             if image_col in df.columns:
@@ -611,36 +592,12 @@ with tabs[5]:
                             log_change(idx, f"Image value standardized: '{val}' → '{standard}'")
                             df.at[idx, image_col] = standard
 
-            def row_has_only_zeroed_issues(idx):
-                note = str(df.at[idx, "RIPARIAN_ValidationNotes"]).strip().lower()
-                if not note:
-                    return True
-                for col in available_cols:
-                    if col in zeroed_columns:
-                        continue
-                    if pd.isna(df.at[idx, col]) or str(df.at[idx, col]).strip() == "":
-                        return False
-                return True
-
-            clean_df = df[[row_has_only_zeroed_issues(idx) for idx in df.index]]
+            df_clean = df[df["RIPARIAN_ValidationNotes"].str.strip() == ""]
 
             clean_path = input_path.replace(".xlsx", "_cleaned_RIPARIAN.xlsx")
             annotated_path = input_path.replace(".xlsx", "_annotated_RIPARIAN.xlsx")
-            clean_df.to_excel(clean_path, index=False)
+            df_clean.to_excel(clean_path, index=False)
             df.to_excel(annotated_path, index=False)
-
-            wb = load_workbook(annotated_path)
-            ws = wb.active
-            val_col_idx = [cell.value for cell in ws[1]].index("RIPARIAN_ValidationNotes")
-            red_fill = PatternFill(start_color="FFFF0000", end_color="FFFF0000", fill_type="solid")
-
-            for row in ws.iter_rows(min_row=2):
-                note = row[val_col_idx].value
-                if note and str(note).strip():
-                    for cell in row:
-                        cell.fill = red_fill
-
-            wb.save(annotated_path)
 
             st.success("✅ RIPARIAN validation files generated.")
             st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_RIPARIAN.xlsx")
