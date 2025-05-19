@@ -34,16 +34,25 @@ with tabs[0]:
         st.warning("To continue, please upload an Excel file.")
 
 # ------------------------ 2. GENERAL Validation Tab ------------------------
+
+python
+Copy
+Edit
+# ------------------------ 2. GENERAL Validation Tab ------------------------
 with tabs[1]:
     st.header("1️⃣ GENERAL Validation")
 
     if uploaded_file:
         run_button = st.button("✅ Run GENERAL Validation")
         if run_button:
+            import re
             df = pd.read_excel(input_path)
             df["ValidationNotes"] = ""
             df["ValidationColorKey"] = ""
             df["TransformNotes"] = ""
+
+            from openpyxl import load_workbook
+            from openpyxl.styles import PatternFill
 
             color_map = {
                 "flagged": "FF9999",
@@ -92,6 +101,7 @@ with tabs[1]:
                 "Nitrate-Nitrogen VALUE (ppm or mg/L)": (0, 10),
                 "Orthophosphate": (0, 5)
             }
+
             for col, (min_val, max_val) in standard_ranges.items():
                 if col in df.columns:
                     mask = (df[col] < min_val) | (df[col] > max_val)
@@ -143,14 +153,42 @@ with tabs[1]:
 
             df_clean = df[df["ValidationNotes"].str.strip() == ""]
 
+            # -------------------- ذخیره خروجی‌های اولیه --------------------
             clean_path = input_path.replace(".xlsx", "_cleaned_GENERAL.xlsx")
             annotated_path = input_path.replace(".xlsx", "_annotated_GENERAL.xlsx")
             df_clean.to_excel(clean_path, index=False)
             df.to_excel(annotated_path, index=False)
 
+            # -------------------- ایجاد فایل بدون حذف مقادیر خارج از range با رنگ زرد --------------------
+            noclean_path = input_path.replace(".xlsx", "_noRangeRemoval_GENERAL.xlsx")
+            df.to_excel(noclean_path, index=False)
+
+            wb = load_workbook(noclean_path)
+            ws = wb.active
+            header = [cell.value for cell in ws[1]]
+
+            for col, (min_val, max_val) in standard_ranges.items():
+                if col in header:
+                    col_idx = header.index(col) + 1
+                    for row in range(2, ws.max_row + 1):
+                        try:
+                            val = ws.cell(row, col_idx).value
+                            if val is not None and (val < min_val or val > max_val):
+                                ws.cell(row, col_idx).fill = fills["range"]
+                                note_idx = header.index("ValidationNotes") + 1
+                                current_note = str(ws.cell(row, note_idx).value or "")
+                                if "Range validation skipped" not in current_note:
+                                    ws.cell(row, note_idx).value = current_note + "; Range validation skipped"
+                        except:
+                            continue
+
+            wb.save(noclean_path)
+
+            # -------------------- دکمه‌های دانلود --------------------
             st.success("✅ GENERAL files have been created.")
             st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_GENERAL.xlsx")
             st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_GENERAL.xlsx")
+            st.download_button("📥 Download no-removal range file", data=open(noclean_path, 'rb').read(), file_name="noRangeRemoval_GENERAL.xlsx")
 
 # ------------------------ 3. CORE Validation Tab ------------------------
 # ------------------------ 3. CORE Validation Tab ------------------------
