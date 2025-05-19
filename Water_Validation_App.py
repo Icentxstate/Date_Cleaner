@@ -179,7 +179,6 @@ with tabs[1]:
 
 
 # ------------------------ 3. CORE Validation Tab ------------------------
-# ------------------------ 3. CORE Validation Tab ------------------------
 with tabs[2]:
     st.header("2️⃣ CORE Validation")
 
@@ -336,33 +335,43 @@ with tabs[3]:
             def log_issue(idx, text):
                 df.at[idx, "ECOLI_ValidationNotes"] += text + "; "
 
+            # Temperature check
             col_temp = "Incubation temperature is 33° C +/- 3° C"
             if col_temp in df.columns and col_temp not in all_zero_cols:
                 df[col_temp] = pd.to_numeric(df[col_temp], errors="coerce")
-                df.loc[(df[col_temp] < 30) | (df[col_temp] > 36), "ECOLI_ValidationNotes"] += "Incubation temperature not in 30–36°C range; "
+                mask = (df[col_temp] < 30) | (df[col_temp] > 36)
+                df.loc[mask, "ECOLI_ValidationNotes"] += "Incubation temperature not in 30–36°C range; "
+                df.loc[mask, col_temp] = np.nan
 
+            # Time check
             col_time = "Incubation time is between 28-31 hours"
             if col_time in df.columns and col_time not in all_zero_cols:
                 df[col_time] = pd.to_numeric(df[col_time], errors="coerce")
-                df.loc[(df[col_time] < 28) | (df[col_time] > 31), "ECOLI_ValidationNotes"] += "Incubation time not in 28–31h range; "
+                mask = (df[col_time] < 28) | (df[col_time] > 31)
+                df.loc[mask, "ECOLI_ValidationNotes"] += "Incubation time not in 28–31h range; "
+                df.loc[mask, col_time] = np.nan
 
+            # Colony count check
             for col in ["Sample 1: Colonies Counted", "Sample 2: Colonies Counted"]:
                 if col in df.columns and col not in all_zero_cols:
-                    df.loc[df[col] > 200, "ECOLI_ValidationNotes"] += f"{col} > 200 colonies; "
+                    mask = df[col] > 200
+                    df.loc[mask, "ECOLI_ValidationNotes"] += f"{col} > 200 colonies; "
+                    df.loc[mask, col] = np.nan
 
+            # Field blank check
             col_blank = "No colony growth on Field Blank"
             if col_blank in df.columns and col_blank not in all_zero_cols:
                 bad_blank = df[col_blank].astype(str).str.lower().isin(["no", "false", "n"])
                 df.loc[bad_blank, "ECOLI_ValidationNotes"] += "Colony growth detected in field blank; "
 
+            # E. Coli = 0
             col_ecoli = "E. Coli Average"
-            if col_ecoli in df.columns:
-                if col_ecoli in all_zero_cols:
-                    pass
-                else:
-                    df.loc[df[col_ecoli] == 0, "ECOLI_ValidationNotes"] += "E. coli = 0; "
-                    df = df[df[col_ecoli] != 0]
+            if col_ecoli in df.columns and col_ecoli not in all_zero_cols:
+                mask = df[col_ecoli] == 0
+                df.loc[mask, "ECOLI_ValidationNotes"] += "E. coli = 0; "
+                df.loc[mask, col_ecoli] = np.nan
 
+            # Rounding to 2 significant figures
             def round_sig_figs(n):
                 try:
                     if n == 0 or pd.isna(n): return n
@@ -379,6 +388,7 @@ with tabs[3]:
                     if not pd.isna(orig) and not pd.isna(rounded):
                         log_change(idx, f"E. coli {orig} → {rounded} (rounded to 2 significant figures)")
 
+            # Dilution factor validation
             def check_dilution(row, prefix):
                 try:
                     count = row[f"{prefix}: Colonies Counted"]
@@ -397,25 +407,13 @@ with tabs[3]:
                     valid = df.apply(lambda row: check_dilution(row, prefix), axis=1)
                     df.loc[~valid, "ECOLI_ValidationNotes"] += f"{prefix} CFU formula mismatch; "
 
-            df_clean = df[df["ECOLI_ValidationNotes"] == ""]
+            # Final clean rows: keep only rows with no validation issues
+            df_clean = df[df["ECOLI_ValidationNotes"].str.strip() == ""]
 
             clean_path = input_path.replace(".xlsx", "_cleaned_ECOLI.xlsx")
             annotated_path = input_path.replace(".xlsx", "_annotated_ECOLI.xlsx")
             df_clean.to_excel(clean_path, index=False)
             df.to_excel(annotated_path, index=False)
-
-            wb = load_workbook(annotated_path)
-            ws = wb.active
-            val_idx = [cell.value for cell in ws[1]].index("ECOLI_ValidationNotes")
-            red_fill = PatternFill(start_color="FFFF0000", end_color="FFFF0000", fill_type="solid")
-
-            for row in ws.iter_rows(min_row=2):
-                note = row[val_idx].value
-                if note and str(note).strip():
-                    for cell in row:
-                        cell.fill = red_fill
-
-            wb.save(annotated_path)
 
             st.success("✅ ECOLI validation files generated.")
             st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_ECOLI.xlsx")
