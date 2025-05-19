@@ -37,168 +37,139 @@ with tabs[0]:
         st.warning("To continue, please upload an Excel file.")
 
 # ------------------------ 2. GENERAL Validation Tab ------------------------
-with tabs[1]:
-    st.header("1️⃣ GENERAL Validation")
+# پارامترهای اصلی برای بررسی کامل نبودن داده‌ها
+core_params = [
+    "pH (standard units)", 
+    "Dissolved Oxygen (mg/L) Average",
+    "Water Temperature (° C)", 
+    "Conductivity (?S/cm)", 
+    "Salinity (ppt)"
+]
 
-    if uploaded_file:
-        run_button = st.button("✅ Run GENERAL Validation")
-        if run_button:
-            import openpyxl
-            from openpyxl import load_workbook
-            from openpyxl.styles import PatternFill
+# لیست سطرهایی که باید کامل حذف شوند
+row_delete_indices = set()
 
-            df = pd.read_excel(input_path)
-            df["ValidationNotes"] = ""
-            df["ValidationColorKey"] = ""
-            df["TransformNotes"] = ""
+# بررسی کمتر از 3 سایت در watershed
+if "Group or Affiliation" in df.columns and "Site ID: Site Name" in df.columns:
+    site_counts = df.groupby("Group or Affiliation")["Site ID: Site Name"].nunique()
+    invalid_ws = site_counts[site_counts < 3].index
+    mask = df["Group or Affiliation"].isin(invalid_ws)
+    df.loc[mask, "ValidationNotes"] += "Less than 3 sites in watershed; "
+    df.loc[mask, "ValidationColorKey"] += "watershed_or_events;"
+    row_delete_indices.update(df[mask].index.tolist())
 
-            # رنگ‌ها و معنی آنها
-            color_map = {
-                "flagged": "FF9999",  # Red
-                "watershed_or_events": "FFCC99",  # Orange
-                "range": "FFFF99",  # Yellow
-                "time": "99CCFF",  # Blue
-                "comments": "CCCCCC",  # Grey
-                "expired": "E6CCFF",  # Purple
-                "contextual_outlier": "FF66B2"  # Pink
-            }
-            fills = {k: PatternFill(start_color=v, end_color=v, fill_type="solid") for k, v in color_map.items()}
+# بررسی کمتر از 10 رویداد در سایت
+if "Site ID: Site Name" in df.columns and "Sample Date" in df.columns:
+    df["Sample Date"] = pd.to_datetime(df["Sample Date"], errors='coerce')
+    event_counts = df.groupby("Site ID: Site Name")["Sample Date"].nunique()
+    low_event_sites = event_counts[event_counts < 10].index
+    mask = df["Site ID: Site Name"].isin(low_event_sites)
+    df.loc[mask, "ValidationNotes"] += "Fewer than 10 events; "
+    df.loc[mask, "ValidationColorKey"] += "watershed_or_events;"
+    row_delete_indices.update(df[mask].index.tolist())
 
-            df.drop_duplicates(inplace=True)
+# بررسی Sample Date نامعتبر
+mask = df["Sample Date"].isna()
+df.loc[mask, "ValidationNotes"] += "Missing or invalid Sample Date; "
+df.loc[mask, "ValidationColorKey"] += "time;"
+row_delete_indices.update(df[mask].index.tolist())
 
-            for col in ['Flag', 'Validation', 'QA/QC']:
-                if col in df.columns:
-                    mask = df[col].notna()
-                    df.loc[mask, "ValidationNotes"] += f"Flagged in {col}; "
-                    df.loc[mask, "ValidationColorKey"] += "flagged;"
+# بررسی Sample Time نامعتبر
+def invalid_time_format(t):
+    try:
+        hour = int(str(t).split(":")[0])
+        return False
+    except:
+        return True
 
-            if "Group or Affiliation" in df.columns and "Site ID: Site Name" in df.columns:
-                site_counts = df.groupby("Group or Affiliation")["Site ID: Site Name"].nunique()
-                invalid_ws = site_counts[site_counts < 3].index
-                mask = df["Group or Affiliation"].isin(invalid_ws)
-                df.loc[mask, "ValidationNotes"] += "Less than 3 sites in watershed; "
-                df.loc[mask, "ValidationColorKey"] += "watershed_or_events;"
+if "Sample Time Final Format" in df.columns:
+    mask = df["Sample Time Final Format"].apply(invalid_time_format)
+    df.loc[mask, "ValidationNotes"] += "Unparsable Sample Time; "
+    df.loc[mask, "ValidationColorKey"] += "time;"
+    row_delete_indices.update(df[mask].index.tolist())
 
-            if "Site ID: Site Name" in df.columns and "Sample Date" in df.columns:
-                df["Sample Date"] = pd.to_datetime(df["Sample Date"], errors='coerce')
-                event_counts = df.groupby("Site ID: Site Name")["Sample Date"].nunique()
-                low_event_sites = event_counts[event_counts < 10].index
-                mask = df["Site ID: Site Name"].isin(low_event_sites)
-                df.loc[mask, "ValidationNotes"] += "Fewer than 10 events; "
-                df.loc[mask, "ValidationColorKey"] += "watershed_or_events;"
+# بررسی نبود کامل همه پارامترهای کلیدی
+for idx, row in df.iterrows():
+    missing = True
+    for param in core_params:
+        if param in df.columns:
+            val = row[param]
+            if pd.notna(val) and val != 0:
+                missing = False
+                break
+    if missing:
+        df.at[idx, "ValidationNotes"] += "All core parameters missing or invalid; "
+        df.at[idx, "ValidationColorKey"] += "range;"
+        row_delete_indices.add(idx)
 
-            # محدوده‌های استاندارد (طبق EPA/TCEQ)
-            standard_ranges = {
-                "pH (standard units)": (6.5, 9.0),
-                "Dissolved Oxygen (mg/L) Average": (5.0, 14.0),
-                "Conductivity (?S/cm)": (50, 1500),
-                "Salinity (ppt)": (0, 35),
-                "Water Temperature (° C)": (0, 35),
-                "Air Temperature (° C)": (-10, 50),
-                "Turbidity": (0, 1000),
-                "E. Coli Average": (1, 235),
-                "Secchi Disk Transparency - Average": (0.2, 5),
-                "Nitrate-Nitrogen VALUE (ppm or mg/L)": (0, 10),
-                "Orthophosphate": (0, 0.5),
-                "DO (%)": (80, 120),
-                "Total Phosphorus (mg/L)": (0, 0.05)
-            }
+# ----------------------------
+# ادامه کد: حذف مقدار سلول برای موارد cell-level
 
-            for col, (min_val, max_val) in standard_ranges.items():
-                if col in df.columns:
-                    mask = (df[col] < min_val) | (df[col] > max_val)
-                    df.loc[mask, "ValidationNotes"] += f"{col} out of range [{min_val}-{max_val}]; "
-                    df.loc[mask, "ValidationColorKey"] += "range;"
-                    df.loc[mask, col] = np.nan
+standard_ranges = {
+    "pH (standard units)": (6.5, 9.0),
+    "Dissolved Oxygen (mg/L) Average": (5.0, 14.0),
+    "Conductivity (?S/cm)": (50, 1500),
+    "Salinity (ppt)": (0, 35),
+    "Water Temperature (° C)": (0, 35),
+    "Air Temperature (° C)": (-10, 50),
+    "Turbidity": (0, 1000),
+    "E. Coli Average": (1, 235),
+    "Secchi Disk Transparency - Average": (0.2, 5),
+    "Nitrate-Nitrogen VALUE (ppm or mg/L)": (0, 10),
+    "Orthophosphate": (0, 0.5),
+    "DO (%)": (80, 120),
+    "Total Phosphorus (mg/L)": (0, 0.05)
+}
 
-            for col in standard_ranges:
-                if col in df.columns and "Site ID: Site Name" in df.columns:
-                    grouped = df[[col, "Site ID: Site Name"]].dropna().groupby("Site ID: Site Name")
-                    means = grouped.transform('mean')[col]
-                    stds = grouped.transform('std')[col]
-                    z_scores = (df[col] - means) / stds
-                    mask = abs(z_scores) > 3
-                    df.loc[mask, "ValidationNotes"] += f"{col} is a contextual outlier (>3 std); "
-                    df.loc[mask, "ValidationColorKey"] += "contextual_outlier;"
-                    df.loc[mask, col] = np.nan
+for col, (min_val, max_val) in standard_ranges.items():
+    if col in df.columns:
+        mask = (df[col] < min_val) | (df[col] > max_val)
+        df.loc[mask, "ValidationNotes"] += f"{col} out of range [{min_val}-{max_val}]; "
+        df.loc[mask, "ValidationColorKey"] += "range;"
+        df.loc[mask, col] = np.nan
 
-            def time_check(t):
-                try:
-                    hour = int(str(t).split(":")[0])
-                    return not (hour < 12 or hour >= 16)
-                except:
-                    return True
+# Contextual outliers
+for col in standard_ranges:
+    if col in df.columns and "Site ID: Site Name" in df.columns:
+        grouped = df[[col, "Site ID: Site Name"]].dropna().groupby("Site ID: Site Name")
+        means = grouped.transform('mean')[col]
+        stds = grouped.transform('std')[col]
+        z_scores = (df[col] - means) / stds
+        mask = abs(z_scores) > 3
+        df.loc[mask, "ValidationNotes"] += f"{col} is a contextual outlier (>3 std); "
+        df.loc[mask, "ValidationColorKey"] += "contextual_outlier;"
+        df.loc[mask, col] = np.nan
 
-            if "Sample Time Final Format" in df.columns:
-                mask = df["Sample Time Final Format"].apply(time_check)
-                df.loc[mask, "ValidationNotes"] += "Sample time not within preferred range; "
-                df.loc[mask, "ValidationColorKey"] += "time;"
+# سایر حذف سلولی
+if "Chemical Reagents Used" in df.columns:
+    mask = df["Chemical Reagents Used"].astype(str).str.contains("expired", case=False, na=False)
+    df.loc[mask, "ValidationNotes"] += "Expired reagents used; "
+    df.loc[mask, "ValidationColorKey"] += "expired;"
+    df.loc[mask, "Chemical Reagents Used"] = np.nan
 
-            if "Comments" in df.columns:
-                empty = df["Comments"].isna() | (df["Comments"].astype(str).str.strip() == "")
-                flagged = df["ValidationNotes"] != ""
-                mask = flagged & empty
-                df.loc[mask, "ValidationNotes"] += "No explanation in Comments; "
-                df.loc[mask, "ValidationColorKey"] += "comments;"
+if "Comments" in df.columns:
+    empty = df["Comments"].isna() | (df["Comments"].astype(str).str.strip() == "")
+    flagged = df["ValidationNotes"] != ""
+    mask = flagged & empty
+    df.loc[mask, "ValidationNotes"] += "No explanation in Comments; "
+    df.loc[mask, "ValidationColorKey"] += "comments;"
 
-            if "Chemical Reagents Used" in df.columns:
-                mask = df["Chemical Reagents Used"].astype(str).str.contains("expired", case=False, na=False)
-                df.loc[mask, "ValidationNotes"] += "Expired reagents used; "
-                df.loc[mask, "ValidationColorKey"] += "expired;"
+# حذف 'valid' و 'invalid'
+replaced = df.replace(to_replace=r'(?i)\b(valid|invalid)\b', value='', regex=True)
+changed = replaced != df
+df.update(replaced)
+df.loc[changed.any(axis=1), "TransformNotes"] += "Removed 'valid/invalid'; "
 
-            replaced = df.replace(to_replace=r'(?i)\b(valid|invalid)\b', value='', regex=True)
-            changed = replaced != df
-            df.update(replaced)
-            df.loc[changed.any(axis=1), "TransformNotes"] += "Removed 'valid/invalid'; "
+# مرتب‌سازی و خروجی نهایی
+if "Site ID: Site Name" in df.columns and "Sample Date" in df.columns:
+    df.sort_values(by=["Site ID: Site Name", "Sample Date"], inplace=True)
 
-            if "Site ID: Site Name" in df.columns and "Sample Date" in df.columns:
-                df.sort_values(by=["Site ID: Site Name", "Sample Date"], inplace=True)
+# حذف ردیف‌هایی که باید کامل حذف شوند
+df_clean = df.drop(index=list(row_delete_indices))
 
-            # خروجی فایل‌ها
-            df_clean = df.copy()
-            clean_path = input_path.replace(".xlsx", "_cleaned_GENERAL.xlsx")
-            annotated_path = input_path.replace(".xlsx", "_annotated_GENERAL.xlsx")
-            df_clean.to_excel(clean_path, index=False)
-            df.to_excel(annotated_path, index=False)
-
-            # 🔻 رنگی‌سازی سلول‌ها + راهنمای تغییرات
-            wb = load_workbook(annotated_path)
-            ws = wb.active
-            header = [cell.value for cell in ws[1]]
-            val_col = header.index("ValidationColorKey") + 1
-
-            for row in range(2, ws.max_row + 1):
-                color_keys = str(ws.cell(row=row, column=val_col).value or "").split(";")
-                for col in range(1, ws.max_column + 1):
-                    col_name = header[col - 1]
-                    cell = ws.cell(row=row, column=col)
-                    if cell.value is None and any(k.strip() in fills for k in color_keys):
-                        for k in color_keys:
-                            k = k.strip()
-                            if k in fills:
-                                cell.fill = fills[k]
-
-            # افزودن برگه راهنمای Validation
-            guide = wb.create_sheet("Validation Guide")
-            guide.append(["Validation Key", "Color", "Explanation"])
-            guide_data = {
-                "flagged": "Red — Flagged in Flag/QA/QC columns",
-                "watershed_or_events": "Orange — Fewer than 3 sites or 10 events",
-                "range": "Yellow — Out of acceptable range (EPA/TCEQ)",
-                "contextual_outlier": "Pink — Contextual outlier (>3 SD)",
-                "time": "Blue — Sample taken at non-standard time",
-                "comments": "Grey — Missing comments for flagged data",
-                "expired": "Purple — Expired reagents were used"
-            }
-            for key, explanation in guide_data.items():
-                guide.append([key, "", explanation])
-                guide.cell(row=guide.max_row, column=2).fill = fills[key]
-
-            wb.save(annotated_path)
-
-            st.success("✅ GENERAL validation complete.")
-            st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_GENERAL.xlsx")
-            st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_GENERAL.xlsx")
+# ذخیره فایل نهایی cleaned و annotated
+df_clean.to_excel(clean_path, index=False)
+df.to_excel(annotated_path, index=False)
 
 
 # ------------------------ 3. CORE Validation Tab ------------------------
