@@ -20,8 +20,7 @@ tabs = st.tabs([
     "3️⃣ ECOLI Validation",
     "4️⃣ ADVANCED Validation",
     "5️⃣ RIPARIAN Validation",
-    "📦 Final Output"
-])
+   ])
 
 # ------------------------ 1. Upload Tab ------------------------
 with tabs[0]:
@@ -611,74 +610,4 @@ with tabs[5]:
             st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_RIPARIAN.xlsx")
             st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_RIPARIAN.xlsx")
 
-# ------------------------ 7. Final Output Tab ------------------------
-# ------------------------ 7. Final Output Tab ------------------------
-with tabs[6]:
-    st.header("📦 Final Output (Auto Run All Validations)")
 
-    uploaded_master_file = st.file_uploader("📂 Upload your raw Excel file (before any validation)", type=["xlsx"], key="final_raw_input")
-
-    if uploaded_master_file:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-            tmp.write(uploaded_master_file.read())
-            input_path = tmp.name
-
-        if st.button("🌀 Run Full Validation Pipeline"):
-            try:
-                # ---- Load base dataframe ----
-                df = pd.read_excel(input_path)
-
-                # ---- Run all validation functions ----
-                from general_validation import run_general_validation
-                from core_validation import run_core_validation
-                from ecoli_validation import run_ecoli_validation
-                from advanced_validation import run_advanced_validation
-                from riparian_validation import run_riparian_validation
-
-                df = run_general_validation(df)
-                df = run_core_validation(df)
-                df = run_ecoli_validation(df)
-                df = run_advanced_validation(df)
-                df = run_riparian_validation(df)
-
-                # ---- Save final outputs ----
-                final_clean_path = "final_cleaned_validated_output.xlsx"
-                final_annotated_path = "final_annotated_validated_output.xlsx"
-
-                df_cleaned = df[df.filter(like="_ValidationNotes").apply(lambda x: x.str.strip() == "", axis=1).all(axis=1)]
-                df_cleaned.to_excel(final_clean_path, index=False)
-                df.to_excel(final_annotated_path, index=False)
-
-                # ---- Download buttons for final output ----
-                st.success("✅ Full validation completed successfully!")
-                st.download_button("📥 Download Final Cleaned File", data=open(final_clean_path, 'rb').read(), file_name="final_cleaned_validated_output.xlsx")
-                st.download_button("📥 Download Final Annotated File", data=open(final_annotated_path, 'rb').read(), file_name="final_annotated_validated_output.xlsx")
-
-            except Exception as e:
-                st.error(f"❌ An error occurred during processing: {e}")
-
-    # ---- Additional downloads from previous tabs ----
-    st.markdown("---")
-    st.subheader("📂 Download Outputs from Individual Tabs")
-
-    def add_download(name, key_clean, key_annotated):
-        if key_clean in st.session_state:
-            clean_df = st.session_state[key_clean]
-            st.download_button(
-                f"⬇️ Download {name} Cleaned File",
-                data=clean_df.to_excel(index=False, engine="openpyxl"),
-                file_name=f"{key_clean}.xlsx"
-            )
-        if key_annotated in st.session_state:
-            annotated_df = st.session_state[key_annotated]
-            st.download_button(
-                f"⬇️ Download {name} Annotated File",
-                data=annotated_df.to_excel(index=False, engine="openpyxl"),
-                file_name=f"{key_annotated}.xlsx"
-            )
-
-    add_download("GENERAL", "general_cleaned_df", "general_annotated_df")
-    add_download("CORE", "core_cleaned_df", "core_annotated_df")
-    add_download("ECOLI", "ecoli_cleaned_df", "ecoli_annotated_df")
-    add_download("ADVANCED", "advanced_cleaned_df", "advanced_annotated_df")
-    add_download("RIPARIAN", "riparian_cleaned_df", "riparian_annotated_df")
