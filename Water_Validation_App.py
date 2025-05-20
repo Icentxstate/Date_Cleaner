@@ -244,7 +244,8 @@ with tabs[2]:
                 df.loc[df[secchi] > df["Total Depth (meters)"], "CORE_Notes"] += "Secchi > Depth; "
 
             # ---------------- Corrected Conductivity Calibration Validation ----------------
-            # ✅ Check that the Post-Test Calibration Conductivity is within ±20% of Standard Value
+            cond_col = "Conductivity (?S/cm)"
+            #✅ Check that the Post-Test Calibration Conductivity is within ±20% of Standard Value
             if "Post-Test Calibration Conductivity" in df.columns and "Standard Value" in df.columns:
                 post_cal = pd.to_numeric(df["Post-Test Calibration Conductivity"], errors="coerce")
                 std_val = pd.to_numeric(df["Standard Value"], errors="coerce")
