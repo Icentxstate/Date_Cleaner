@@ -243,14 +243,14 @@ with tabs[2]:
                 df.loc[~df[secchi].apply(lambda v: len(str(v).replace(".", "").lstrip("0")) <= 2), "CORE_Notes"] += "Secchi not 2 significant figures; "
                 df.loc[df[secchi] > df["Total Depth (meters)"], "CORE_Notes"] += "Secchi > Depth; "
 
-            # Conductivity validation ±20% of Standard Value
-            cond_col = "Conductivity (?S/cm)"
-            if cond_col in df.columns and "Standard Value" in df.columns:
-                cond = df[cond_col]
-                std = df["Standard Value"]
-                good = (cond >= 0.8 * std) & (cond <= 1.2 * std)
-                df.loc[~good, "CORE_Notes"] += "Conductivity outside ±20%; "
-                df.loc[~good, cond_col] = np.nan
+           # ---------------- Corrected Conductivity Calibration Validation ----------------
+           # ✅ Check that the Post-Test Calibration Conductivity is within ±20% of Standard Value
+           if "Post-Test Calibration Conductivity" in df.columns and "Standard Value" in df.columns:
+               post_cal = pd.to_numeric(df["Post-Test Calibration Conductivity"], errors="coerce")
+               std_val = pd.to_numeric(df["Standard Value"], errors="coerce")
+
+               valid_cal = (post_cal >= 0.8 * std_val) & (post_cal <= 1.2 * std_val)
+               df.loc[~valid_cal, "CORE_Notes"] += "Post-Test Calibration outside ±20% of standard; "
 
             # Estimated TDS
             if cond_col in df.columns:
