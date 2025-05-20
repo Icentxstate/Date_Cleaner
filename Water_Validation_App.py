@@ -172,7 +172,8 @@ with tabs[1]:
             annotated_path = input_path.replace(".xlsx", "_annotated_GENERAL.xlsx")
             df_clean.to_excel(clean_path, index=False)
             df.to_excel(annotated_path, index=False)
-
+            st.session_state["general_cleaned_df"] = df_clean
+            st.session_state["general_annotated_df"] = df
             st.success("✅ GENERAL validation complete.")
             st.download_button("📅 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_GENERAL.xlsx")
             st.download_button("📅 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_GENERAL.xlsx")
@@ -304,7 +305,8 @@ with tabs[2]:
             annotated_path = input_path.replace(".xlsx", "_annotated_CORE.xlsx")
             df_clean.to_excel(clean_path, index=False)
             df.to_excel(annotated_path, index=False)
-
+            st.session_state["core_cleaned_df"] = df_clean
+            st.session_state["core_annotated_df"] = df
             st.success("✅ CORE validation files generated.")
             st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_CORE.xlsx")
             st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_CORE.xlsx")
@@ -414,6 +416,8 @@ with tabs[3]:
             annotated_path = input_path.replace(".xlsx", "_annotated_ECOLI.xlsx")
             df_clean.to_excel(clean_path, index=False)
             df.to_excel(annotated_path, index=False)
+            st.session_state["ecoli_cleaned_df"] = df_clean
+            st.session_state["ecoli_annotated_df"] = df
 
             st.success("✅ ECOLI validation files generated.")
             st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_ECOLI.xlsx")
@@ -517,7 +521,8 @@ with tabs[4]:
             annotated_path = input_path.replace(".xlsx", "_annotated_ADVANCED.xlsx")
             df_clean.to_excel(clean_path, index=False)
             df.to_excel(annotated_path, index=False)
-
+            st.session_state["advanced_cleaned_df"] = df_clean
+            st.session_state["advanced_annotated_df"] = df
             st.success("✅ ADVANCED validation files generated.")
             st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_ADVANCED.xlsx")
             st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_ADVANCED.xlsx")
@@ -598,6 +603,9 @@ with tabs[5]:
             annotated_path = input_path.replace(".xlsx", "_annotated_RIPARIAN.xlsx")
             df_clean.to_excel(clean_path, index=False)
             df.to_excel(annotated_path, index=False)
+            st.session_state["riparian_cleaned_df"] = df_clean
+            st.session_state["riparian_annotated_df"] = df
+
 
             st.success("✅ RIPARIAN validation files generated.")
             st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_RIPARIAN.xlsx")
@@ -605,85 +613,57 @@ with tabs[5]:
 
 # ------------------------ 7. Final Output Tab ------------------------
 with tabs[6]:
-    st.header("📦 Final Output: Run All Validations Sequentially")
+    st.header("📦 Final Output")
 
-    uploaded_master_file = st.file_uploader("📂 Upload the original Excel file (raw input)", type=["xlsx"], key="final_master_file")
+    st.markdown("✅ Download all cleaned and annotated outputs generated during the previous validation steps.")
 
-    if uploaded_master_file:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-            tmp.write(uploaded_master_file.read())
-            input_path = tmp.name
+    all_keys = {
+        "GENERAL": ("general_cleaned_df", "general_annotated_df"),
+        "CORE": ("core_cleaned_df", "core_annotated_df"),
+        "ECOLI": ("ecoli_cleaned_df", "ecoli_annotated_df"),
+        "ADVANCED": ("advanced_cleaned_df", "advanced_annotated_df"),
+        "RIPARIAN": ("riparian_cleaned_df", "riparian_annotated_df")
+    }
 
-        run_all = st.button("🌀 Run Full Validation Sequence")
+    available_stages = [stage for stage, (clean_k, anno_k) in all_keys.items() if clean_k in st.session_state and anno_k in st.session_state]
 
-        if run_all:
+    if not available_stages:
+        st.error("⛔ No validation results found. Please run previous validation tabs first.")
+    else:
+        for stage in available_stages:
+            st.subheader(f"📄 {stage} Outputs")
+            clean_df = st.session_state[all_keys[stage][0]]
+            anno_df = st.session_state[all_keys[stage][1]]
+
+            clean_filename = f"{stage.lower()}_cleaned.xlsx"
+            anno_filename = f"{stage.lower()}_annotated.xlsx"
+
+            clean_df.to_excel(clean_filename, index=False)
+            anno_df.to_excel(anno_filename, index=False)
+
+            st.download_button(f"⬇️ Download {stage} Cleaned", data=open(clean_filename, "rb").read(), file_name=clean_filename)
+            st.download_button(f"⬇️ Download {stage} Annotated", data=open(anno_filename, "rb").read(), file_name=anno_filename)
+
+        # Optional: Generate merged final files
+        if st.button("🌀 Generate Final Merged Output"):
             try:
-                def run_general_validation(input_path):
-                    df = pd.read_excel(input_path)
-                    # (Add your GENERAL validation logic here from Tab 1)
-                    cleaned_path = input_path.replace(".xlsx", "_cleaned_GENERAL.xlsx")
-                    annotated_path = input_path.replace(".xlsx", "_annotated_GENERAL.xlsx")
-                    df.to_excel(annotated_path, index=False)
-                    df_clean = df[df["ValidationNotes"].str.strip() == ""]  # or your final cleaned logic
-                    df_clean.to_excel(cleaned_path, index=False)
-                    return cleaned_path, annotated_path
+                from functools import reduce
 
-                def run_core_validation(input_path):
-                    df = pd.read_excel(input_path)
-                    # (Add your CORE validation logic here from Tab 2)
-                    cleaned_path = input_path.replace(".xlsx", "_cleaned_CORE.xlsx")
-                    annotated_path = input_path.replace(".xlsx", "_annotated_CORE.xlsx")
-                    df.to_excel(annotated_path, index=False)
-                    df_clean = df[df["CORE_Notes"].str.strip() == ""]
-                    df_clean.to_excel(cleaned_path, index=False)
-                    return cleaned_path, annotated_path
+                dfs_cleaned = [st.session_state[k[0]] for k in all_keys.values() if k[0] in st.session_state]
+                dfs_annotated = [st.session_state[k[1]] for k in all_keys.values() if k[1] in st.session_state]
 
-                def run_ecoli_validation(input_path):
-                    df = pd.read_excel(input_path)
-                    # (Add your ECOLI validation logic here from Tab 3)
-                    cleaned_path = input_path.replace(".xlsx", "_cleaned_ECOLI.xlsx")
-                    annotated_path = input_path.replace(".xlsx", "_annotated_ECOLI.xlsx")
-                    df.to_excel(annotated_path, index=False)
-                    df_clean = df[df["ECOLI_ValidationNotes"].str.strip() == ""]
-                    df_clean.to_excel(cleaned_path, index=False)
-                    return cleaned_path, annotated_path
+                df_final_cleaned = reduce(lambda left, right: pd.merge(left, right, how="outer"), dfs_cleaned)
+                df_final_annotated = reduce(lambda left, right: pd.merge(left, right, how="outer"), dfs_annotated)
 
-                def run_advanced_validation(input_path):
-                    df = pd.read_excel(input_path)
-                    # (Add your ADVANCED validation logic here from Tab 4)
-                    cleaned_path = input_path.replace(".xlsx", "_cleaned_ADVANCED.xlsx")
-                    annotated_path = input_path.replace(".xlsx", "_annotated_ADVANCED.xlsx")
-                    df.to_excel(annotated_path, index=False)
-                    df_clean = df[df["ADVANCED_ValidationNotes"].str.strip() == ""]
-                    df_clean.to_excel(cleaned_path, index=False)
-                    return cleaned_path, annotated_path
-
-                def run_riparian_validation(input_path):
-                    df = pd.read_excel(input_path)
-                    # (Add your RIPARIAN validation logic here from Tab 5)
-                    cleaned_path = input_path.replace(".xlsx", "_cleaned_RIPARIAN.xlsx")
-                    annotated_path = input_path.replace(".xlsx", "_annotated_RIPARIAN.xlsx")
-                    df.to_excel(annotated_path, index=False)
-                    df_clean = df[df["RIPARIAN_ValidationNotes"].str.strip() == ""]
-                    df_clean.to_excel(cleaned_path, index=False)
-                    return cleaned_path, annotated_path
-
-                # Run validations in sequence
-                gen_clean, gen_anno = run_general_validation(input_path)
-                core_clean, core_anno = run_core_validation(gen_clean)
-                ecoli_clean, ecoli_anno = run_ecoli_validation(core_clean)
-                adv_clean, adv_anno = run_advanced_validation(ecoli_clean)
-                rip_clean, rip_anno = run_riparian_validation(adv_clean)
-
-                # Final output files
                 final_cleaned_path = "final_cleaned_validated_output.xlsx"
                 final_annotated_path = "final_annotated_validated_output.xlsx"
-                pd.read_excel(rip_clean).to_excel(final_cleaned_path, index=False)
-                pd.read_excel(rip_anno).to_excel(final_annotated_path, index=False)
 
-                st.success("✅ All validations completed successfully!")
-                st.download_button("📥 Download Final Cleaned File", data=open(final_cleaned_path, 'rb').read(), file_name="final_cleaned_validated_output.xlsx")
-                st.download_button("📥 Download Final Annotated File", data=open(final_annotated_path, 'rb').read(), file_name="final_annotated_validated_output.xlsx")
+                df_final_cleaned.to_excel(final_cleaned_path, index=False)
+                df_final_annotated.to_excel(final_annotated_path, index=False)
+
+                st.success("✅ Final merged outputs generated.")
+                st.download_button("📥 Download Final Cleaned", data=open(final_cleaned_path, 'rb').read(), file_name=final_cleaned_path)
+                st.download_button("📥 Download Final Annotated", data=open(final_annotated_path, 'rb').read(), file_name=final_annotated_path)
 
             except Exception as e:
-                st.error(f"❌ Error during validation sequence: {e}")
+                st.error(f"❌ Error during merging: {e}")
