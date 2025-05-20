@@ -612,7 +612,11 @@ with tabs[5]:
             st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_RIPARIAN.xlsx")
 
 # ------------------------ 7. Final Output Tab ------------------------
-# ------------------------ 7. Final Output Tab ------------------------
+from general_validation import run_general_validation
+from core_validation import run_core_validation
+from ecoli_validation import run_ecoli_validation
+from advanced_validation import run_advanced_validation
+from riparian_validation import run_riparian_validation
 with tabs[6]:
     st.header("📦 Final Output (Auto Run All Validations)")
 
