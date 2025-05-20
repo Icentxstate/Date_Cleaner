@@ -41,6 +41,7 @@ tabs = st.tabs([
     "3️⃣ ECOLI Validation",
     "4️⃣ ADVANCED Validation",
     "5️⃣ RIPARIAN Validation",
+    "📘 Cleaning Guide"
    ])
 
 # ------------------------ 1. Upload Tab ------------------------
@@ -613,5 +614,22 @@ with tabs[5]:
             st.success("✅ RIPARIAN validation files generated.")
             st.download_button("📥 Download cleaned file", data=open(clean_path, 'rb').read(), file_name="cleaned_RIPARIAN.xlsx")
             st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_RIPARIAN.xlsx")
+
+# ------------------------ 7. Cleaning Guide Tab ------------------------
+with tabs[6]:
+    st.header("📘 Download Data Cleaning Guide")
+    st.markdown("""
+    You can download the official data cleaning and validation guide using the button below.  
+    This guide outlines all rules applied during GENERAL, CORE, ECOLI, ADVANCED, and RIPARIAN validation steps.
+    """)
+
+    with open("Validation Rules for Parameters.pdf", "rb") as f:
+        st.download_button(
+            label="📄 Download Validation Guide (PDF)",
+            data=f,
+            file_name="Validation_Rules_for_Parameters.pdf",
+            mime="application/pdf"
+        )
+
 
 
