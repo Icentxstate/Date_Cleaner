@@ -243,32 +243,14 @@ with tabs[2]:
                 df.loc[~df[secchi].apply(lambda v: len(str(v).replace(".", "").lstrip("0")) <= 2), "CORE_Notes"] += "Secchi not 2 significant figures; "
                 df.loc[df[secchi] > df["Total Depth (meters)"], "CORE_Notes"] += "Secchi > Depth; "
 
-           # ---------------- Corrected Conductivity Calibration Validation ----------------
-           # ✅ Check that the Post-Test Calibration Conductivity is within ±20% of Standard Value
-           if "Post-Test Calibration Conductivity" in df.columns and "Standard Value" in df.columns:
-               post_cal = pd.to_numeric(df["Post-Test Calibration Conductivity"], errors="coerce")
-               std_val = pd.to_numeric(df["Standard Value"], errors="coerce")
+            # ---------------- Corrected Conductivity Calibration Validation ----------------
+            # ✅ Check that the Post-Test Calibration Conductivity is within ±20% of Standard Value
+            if "Post-Test Calibration Conductivity" in df.columns and "Standard Value" in df.columns:
+                post_cal = pd.to_numeric(df["Post-Test Calibration Conductivity"], errors="coerce")
+                std_val = pd.to_numeric(df["Standard Value"], errors="coerce")
 
-               valid_cal = (post_cal >= 0.8 * std_val) & (post_cal <= 1.2 * std_val)
-               df.loc[~valid_cal, "CORE_Notes"] += "Post-Test Calibration outside ±20% of standard; "
-
-            # Estimated TDS
-            if cond_col in df.columns:
-                df["TDS Calculated"] = df[cond_col] * 0.65
-                for idx in df.index:
-                    log_change("TDS", idx, df.at[idx, "TDS Calculated"], "Estimated TDS = Conductivity × 0.65")
-
-            # Calibration date-time difference > 24h
-            if "Sampling Time" in df.columns:
-                df["Sampling Time"] = pd.to_datetime(df["Sampling Time"], errors='coerce')
-                if "Post-Test Calibration" in df.columns:
-                    df["Post-Test Calibration"] = pd.to_datetime(df["Post-Test Calibration"], errors='coerce')
-                    delta = (df["Sampling Time"] - df["Post-Test Calibration"]).abs().dt.total_seconds() / 3600
-                    df.loc[delta > 24, "CORE_Notes"] += "Post-calibration >24h; "
-                if "Pre-Test Calibration" in df.columns:
-                    df["Pre-Test Calibration"] = pd.to_datetime(df["Pre-Test Calibration"], errors='coerce')
-                    delta = (df["Sampling Time"] - df["Pre-Test Calibration"]).abs().dt.total_seconds() / 3600
-                    df.loc[delta > 24, "CORE_Notes"] += "Pre-calibration >24h; "
+                valid_cal = (post_cal >= 0.8 * std_val) & (post_cal <= 1.2 * std_val)
+                df.loc[~valid_cal, "CORE_Notes"] += "Post-Test Calibration outside ±20% of standard; "
 
             # Rounding pH and Temp
             if "pH (standard units)" in df.columns:
