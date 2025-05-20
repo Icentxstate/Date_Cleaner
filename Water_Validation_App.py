@@ -22,18 +22,18 @@ def set_background(image_file):
         <style>
         .stApp {{
             background-image: url("data:image/png;base64,{encoded}");
-            background-size: contain;
+            background-size: 200px;
             background-repeat: no-repeat;
-            background-position: bottom right;
+            background-position: top right;
             background-attachment: fixed;
-            opacity: 0.15;
+            background-origin: content-box;
+            opacity: 0.2;
+            padding-top: 80px; /* Optional spacing */
         }}
         </style>
     """
     st.markdown(css, unsafe_allow_html=True)
 
-# مسیر فایل لوگو را دقیق مشخص کن:
-set_background("meadows-vertical-txstate-blue-gold.png")
 # ==== Tabs ====
 tabs = st.tabs([
     "📁 Upload File",
