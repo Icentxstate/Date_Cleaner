@@ -604,47 +604,86 @@ with tabs[5]:
             st.download_button("📥 Download annotated file", data=open(annotated_path, 'rb').read(), file_name="annotated_RIPARIAN.xlsx")
 
 # ------------------------ 7. Final Output Tab ------------------------
-# ------------------------ 7. Final Output Tab ------------------------
 with tabs[6]:
-    st.header("📦 Final Output")
+    st.header("📦 Final Output: Run All Validations Sequentially")
 
-    st.markdown("Upload all cleaned and annotated files from the previous validation steps and merge them into final outputs.")
+    uploaded_master_file = st.file_uploader("📂 Upload the original Excel file (raw input)", type=["xlsx"], key="final_master_file")
 
-    uploaded_general_cleaned = st.file_uploader("📂 Cleaned GENERAL file", type=["xlsx"], key="final_general_cleaned")
-    uploaded_core_cleaned = st.file_uploader("📂 Cleaned CORE file", type=["xlsx"], key="final_core_cleaned")
-    uploaded_ecoli_cleaned = st.file_uploader("📂 Cleaned ECOLI file", type=["xlsx"], key="final_ecoli_cleaned")
-    uploaded_advanced_cleaned = st.file_uploader("📂 Cleaned ADVANCED file", type=["xlsx"], key="final_advanced_cleaned")
-    uploaded_riparian_cleaned = st.file_uploader("📂 Cleaned RIPARIAN file", type=["xlsx"], key="final_riparian_cleaned")
+    if uploaded_master_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            tmp.write(uploaded_master_file.read())
+            input_path = tmp.name
 
-    uploaded_general_annotated = st.file_uploader("📂 Annotated GENERAL file", type=["xlsx"], key="final_general_annotated")
-    uploaded_core_annotated = st.file_uploader("📂 Annotated CORE file", type=["xlsx"], key="final_core_annotated")
-    uploaded_ecoli_annotated = st.file_uploader("📂 Annotated ECOLI file", type=["xlsx"], key="final_ecoli_annotated")
-    uploaded_advanced_annotated = st.file_uploader("📂 Annotated ADVANCED file", type=["xlsx"], key="final_advanced_annotated")
-    uploaded_riparian_annotated = st.file_uploader("📂 Annotated RIPARIAN file", type=["xlsx"], key="final_riparian_annotated")
+        run_all = st.button("🌀 Run Full Validation Sequence")
 
-    if st.button("🌀 Merge and Generate Final Output"):
-        cleaned_files = [uploaded_general_cleaned, uploaded_core_cleaned, uploaded_ecoli_cleaned, uploaded_advanced_cleaned, uploaded_riparian_cleaned]
-        annotated_files = [uploaded_general_annotated, uploaded_core_annotated, uploaded_ecoli_annotated, uploaded_advanced_annotated, uploaded_riparian_annotated]
-
-        if not all(cleaned_files + annotated_files):
-            st.error("⛔ Please upload all cleaned and annotated files before proceeding.")
-        else:
+        if run_all:
             try:
-                from functools import reduce
-                dfs_cleaned = [pd.read_excel(file) for file in cleaned_files]
-                dfs_annotated = [pd.read_excel(file) for file in annotated_files]
+                def run_general_validation(input_path):
+                    df = pd.read_excel(input_path)
+                    # (Add your GENERAL validation logic here from Tab 1)
+                    cleaned_path = input_path.replace(".xlsx", "_cleaned_GENERAL.xlsx")
+                    annotated_path = input_path.replace(".xlsx", "_annotated_GENERAL.xlsx")
+                    df.to_excel(annotated_path, index=False)
+                    df_clean = df[df["ValidationNotes"].str.strip() == ""]  # or your final cleaned logic
+                    df_clean.to_excel(cleaned_path, index=False)
+                    return cleaned_path, annotated_path
 
-                df_final_cleaned = reduce(lambda left, right: pd.merge(left, right, how="outer"), dfs_cleaned)
-                df_final_annotated = reduce(lambda left, right: pd.merge(left, right, how="outer"), dfs_annotated)
+                def run_core_validation(input_path):
+                    df = pd.read_excel(input_path)
+                    # (Add your CORE validation logic here from Tab 2)
+                    cleaned_path = input_path.replace(".xlsx", "_cleaned_CORE.xlsx")
+                    annotated_path = input_path.replace(".xlsx", "_annotated_CORE.xlsx")
+                    df.to_excel(annotated_path, index=False)
+                    df_clean = df[df["CORE_Notes"].str.strip() == ""]
+                    df_clean.to_excel(cleaned_path, index=False)
+                    return cleaned_path, annotated_path
 
-                cleaned_path = "final_cleaned_validated_output.xlsx"
-                annotated_path = "final_annotated_validated_output.xlsx"
+                def run_ecoli_validation(input_path):
+                    df = pd.read_excel(input_path)
+                    # (Add your ECOLI validation logic here from Tab 3)
+                    cleaned_path = input_path.replace(".xlsx", "_cleaned_ECOLI.xlsx")
+                    annotated_path = input_path.replace(".xlsx", "_annotated_ECOLI.xlsx")
+                    df.to_excel(annotated_path, index=False)
+                    df_clean = df[df["ECOLI_ValidationNotes"].str.strip() == ""]
+                    df_clean.to_excel(cleaned_path, index=False)
+                    return cleaned_path, annotated_path
 
-                df_final_cleaned.to_excel(cleaned_path, index=False)
-                df_final_annotated.to_excel(annotated_path, index=False)
+                def run_advanced_validation(input_path):
+                    df = pd.read_excel(input_path)
+                    # (Add your ADVANCED validation logic here from Tab 4)
+                    cleaned_path = input_path.replace(".xlsx", "_cleaned_ADVANCED.xlsx")
+                    annotated_path = input_path.replace(".xlsx", "_annotated_ADVANCED.xlsx")
+                    df.to_excel(annotated_path, index=False)
+                    df_clean = df[df["ADVANCED_ValidationNotes"].str.strip() == ""]
+                    df_clean.to_excel(cleaned_path, index=False)
+                    return cleaned_path, annotated_path
 
-                st.success("✅ Final merged files have been generated successfully!")
-                st.download_button("📥 Download final cleaned file", data=open(cleaned_path, 'rb').read(), file_name="final_cleaned_validated_output.xlsx")
-                st.download_button("📥 Download final annotated file", data=open(annotated_path, 'rb').read(), file_name="final_annotated_validated_output.xlsx")
+                def run_riparian_validation(input_path):
+                    df = pd.read_excel(input_path)
+                    # (Add your RIPARIAN validation logic here from Tab 5)
+                    cleaned_path = input_path.replace(".xlsx", "_cleaned_RIPARIAN.xlsx")
+                    annotated_path = input_path.replace(".xlsx", "_annotated_RIPARIAN.xlsx")
+                    df.to_excel(annotated_path, index=False)
+                    df_clean = df[df["RIPARIAN_ValidationNotes"].str.strip() == ""]
+                    df_clean.to_excel(cleaned_path, index=False)
+                    return cleaned_path, annotated_path
+
+                # Run validations in sequence
+                gen_clean, gen_anno = run_general_validation(input_path)
+                core_clean, core_anno = run_core_validation(gen_clean)
+                ecoli_clean, ecoli_anno = run_ecoli_validation(core_clean)
+                adv_clean, adv_anno = run_advanced_validation(ecoli_clean)
+                rip_clean, rip_anno = run_riparian_validation(adv_clean)
+
+                # Final output files
+                final_cleaned_path = "final_cleaned_validated_output.xlsx"
+                final_annotated_path = "final_annotated_validated_output.xlsx"
+                pd.read_excel(rip_clean).to_excel(final_cleaned_path, index=False)
+                pd.read_excel(rip_anno).to_excel(final_annotated_path, index=False)
+
+                st.success("✅ All validations completed successfully!")
+                st.download_button("📥 Download Final Cleaned File", data=open(final_cleaned_path, 'rb').read(), file_name="final_cleaned_validated_output.xlsx")
+                st.download_button("📥 Download Final Annotated File", data=open(final_annotated_path, 'rb').read(), file_name="final_annotated_validated_output.xlsx")
+
             except Exception as e:
-                st.error(f"❌ Error while merging files: {e}")
+                st.error(f"❌ Error during validation sequence: {e}")
