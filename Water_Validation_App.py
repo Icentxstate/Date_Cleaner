@@ -22,13 +22,12 @@ def set_background(image_file):
         <style>
         .stApp {{
             background-image: url("data:image/png;base64,{encoded}");
-            background-size: 200px;
+            background-size: 180px;
             background-repeat: no-repeat;
-            background-position: top right;
+            background-position: bottom right;
             background-attachment: fixed;
             background-origin: content-box;
-            opacity: 0.2;
-            padding-top: 80px; /* Optional spacing */
+            opacity: 0.15;
         }}
         </style>
     """
