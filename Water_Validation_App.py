@@ -33,7 +33,7 @@ def set_background(image_file):
     st.markdown(css, unsafe_allow_html=True)
 
 # مسیر فایل لوگو را دقیق مشخص کن:
-set_background("Date_Cleaner/meadows-vertical-txstate-blue-gold.png")
+set_background("meadows-vertical-txstate-blue-gold.png")
 # ==== Tabs ====
 tabs = st.tabs([
     "📁 Upload File",
