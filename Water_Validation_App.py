@@ -12,6 +12,28 @@ import os
 st.set_page_config(layout="wide")
 st.title("🧪 Water Quality Data Validation App")
 
+
+#------------Background 
+def set_background(image_file):
+    with open(image_file, "rb") as img_file:
+        import base64
+        encoded = base64.b64encode(img_file.read()).decode()
+    css = f"""
+        <style>
+        .stApp {{
+            background-image: url("data:image/png;base64,{encoded}");
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: bottom right;
+            background-attachment: fixed;
+            opacity: 0.15;
+        }}
+        </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
+
+# مسیر فایل لوگو را دقیق مشخص کن:
+set_background("Date_Cleaner/meadows-vertical-txstate-blue-gold.png")
 # ==== Tabs ====
 tabs = st.tabs([
     "📁 Upload File",
