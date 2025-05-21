@@ -623,13 +623,17 @@ with tabs[6]:
     This guide outlines all rules applied during GENERAL, CORE, ECOLI, ADVANCED, and RIPARIAN validation steps.
     """)
 
-    with open("Validation Rules for Parameters.pdf", "rb") as f:
+import os
+
+guide_path = "Validation Rules for Parameters.pdf"
+if os.path.exists(guide_path):
+    with open(guide_path, "rb") as f:
         st.download_button(
             label="📄 Download Validation Guide (PDF)",
             data=f,
             file_name="Validation_Rules_for_Parameters.pdf",
             mime="application/pdf"
         )
-
-
+else:
+    st.warning("📁 Guide file not found in directory.")
 
