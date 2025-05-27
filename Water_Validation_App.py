@@ -626,7 +626,7 @@ with tabs[6]:
     with open("Validation Rules for Parameters.pdf", "rb") as f:
         st.download_button(
             label="📄 Download Validation Guide (PDF)",
-            data=f,
+            data=f.read(),
             file_name="Validation_Rules_for_Parameters.pdf",
             mime="application/pdf"
-
+        )
