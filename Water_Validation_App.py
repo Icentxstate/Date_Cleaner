@@ -1055,7 +1055,7 @@ with tabs[6]:
 with tabs[7]:
     st.header("📘 Download Data Cleaning Guide")
     st.markdown("Download the official data cleaning and validation guide.")
-    guide_filename_on_disk = "Validation Rules for Parameters.pdf"
+    guide_filename_on_disk = "Validation Rules for Parameters.pdf.pdf"
     if os.path.exists(guide_filename_on_disk):
         with open(guide_filename_on_disk, "rb") as f:
             st.download_button(
