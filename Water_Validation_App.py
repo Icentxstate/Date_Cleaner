@@ -1,17 +1,17 @@
 # Water_Validation_App.py
 # Streamlit app for Water Quality Data Validation (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)
-# Now includes: duplicates removal, flagged-row removal, midday sampling warning,
-# conductivity alias handling, calibration time (±24h), two-step E. coli rounding,
-# stricter unit checks, and stronger riparian completeness checks.
+# Includes: duplicates removal, flagged-row removal, midday warning, conductivity aliases,
+# calibration time (≤24h), two-step E. coli rounding, stricter unit checks, riparian completeness,
+# Final_Combined.xlsx (notes merged) + Final_Repaired.xlsx (values actually fixed).
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import tempfile, zipfile, io, os, re
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Tuple
 
-# Ensure openpyxl is available
+# Ensure openpyxl is available for Excel I/O
 from openpyxl import load_workbook  # noqa: F401
 
 # -------------------- Page setup --------------------
@@ -64,20 +64,16 @@ def get_cond_col(df: pd.DataFrame) -> Optional[str]:
 def parse_hour_from_time_string(t) -> Optional[int]:
     try:
         s = str(t).strip()
-        # Try HH:MM or H:MM or HHMM
-        m = re.match(r"^(\d{1,2})[:\.]?(\d{2})?", s)
+        m = re.match(r"^(\d{1,2})[:\.]?(\d{2})?", s)  # HH:MM / H:MM / HHMM
         if not m: 
             return None
         h = int(m.group(1))
-        if 0 <= h <= 23:
-            return h
+        return h if 0 <= h <= 23 else None
     except:
-        pass
-    return None
+        return None
 
 def try_parse_datetime(date_val, time_val=None) -> Optional[datetime]:
-    # date_val may already be a datetime/date
-    dt = None
+    # date part
     try:
         if pd.isna(date_val):
             return None
@@ -90,21 +86,18 @@ def try_parse_datetime(date_val, time_val=None) -> Optional[datetime]:
             dt = dt.to_pydatetime()
     except:
         return None
-
+    # time part
     if time_val is not None:
         try:
             s = str(time_val)
-            # parse HH:MM
             m = re.match(r"^(\d{1,2}):(\d{2})", s)
             if m:
                 h, minute = int(m.group(1)), int(m.group(2))
                 if 0 <= h <= 23 and 0 <= minute <= 59:
                     dt = dt.replace(hour=h, minute=minute, second=0, microsecond=0)
                 else:
-                    # fallback noon
                     dt = dt.replace(hour=12, minute=0, second=0, microsecond=0)
             else:
-                # fallback hour-only
                 h = parse_hour_from_time_string(s)
                 if h is not None:
                     dt = dt.replace(hour=h, minute=0, second=0, microsecond=0)
@@ -120,7 +113,7 @@ def is_truthy_flag(val) -> bool:
     s = str(val).strip().lower()
     return s in {"y","yes","true","1","flag","flagged","invalid","bad","exclude","remove"}
 
-# -------------------- Final combiner --------------------
+# -------------------- Key builder for merges --------------------
 def make_key(df: pd.DataFrame) -> pd.Series:
     cols = []
     if "Group or Affiliation" in df.columns:
@@ -138,6 +131,7 @@ def make_key(df: pd.DataFrame) -> pd.Series:
         out = out.str.cat(c.fillna(""), sep="|")
     return out
 
+# -------------------- Final combiner --------------------
 def build_final_combined(base_df: pd.DataFrame,
                          g_annot: Optional[pd.DataFrame],
                          c_annot: Optional[pd.DataFrame],
@@ -197,6 +191,116 @@ def build_final_combined(base_df: pd.DataFrame,
     final.drop(columns=["_key_"], inplace=True, errors="ignore")
     return final
 
+# -------------------- Repaired dataset (apply safe fixes to values) --------------------
+def build_repaired_dataset(base_df: pd.DataFrame,
+                           g_annot: Optional[pd.DataFrame],
+                           c_annot: Optional[pd.DataFrame],
+                           e_annot: Optional[pd.DataFrame],
+                           a_annot: Optional[pd.DataFrame],
+                           r_annot: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """Apply deterministic, safe fixes onto the data itself and log them."""
+    rep = base_df.copy()
+    rep["_key_"] = make_key(rep)
+    rep["Repaired_ChangeLog"] = ""
+
+    def map_from(src_df, src_col):
+        if src_df is None or src_col not in src_df.columns:
+            return None
+        tmp = src_df.copy()
+        tmp["_key_"] = make_key(src_df)
+        s = tmp.set_index("_key_")[src_col]
+        return s.reindex(rep["_key_"]).values  # aligned to rep rows
+
+    def apply_replace(dst_col, new_vals, fmt=None, note=None):
+        if new_vals is None or dst_col not in rep.columns:
+            return
+        if fmt:
+            try:
+                new_vals = np.array([fmt(v) for v in new_vals], dtype=object)
+            except Exception:
+                pass
+        mask = pd.notna(new_vals)
+        if mask.any():
+            rep.loc[mask, dst_col] = new_vals[mask]
+            if note:
+                rep.loc[mask, "Repaired_ChangeLog"] += note
+
+    # From CORE: pH Rounded, Water Temp Rounded, DO1/DO2 Rounded, Salinity Formatted
+    apply_replace("pH (standard units)",      map_from(c_annot, "pH Rounded"),
+                  note="pH→rounded(0.1); ")
+    apply_replace("Water Temperature (° C)",  map_from(c_annot, "Water Temp Rounded"),
+                  note="WaterTemp→rounded(0.1); ")
+    do1 = map_from(c_annot, "DO1 Rounded")
+    do2 = map_from(c_annot, "DO2 Rounded")
+    if do1 is not None and do2 is not None and "Dissolved Oxygen (mg/L) Average" in rep.columns:
+        mean_do = []
+        for a, b in zip(do1, do2):
+            try:
+                if pd.notna(a) and pd.notna(b):
+                    mean_do.append(round((float(a)+float(b))/2, 1))
+                else:
+                    mean_do.append(np.nan)
+            except:
+                mean_do.append(np.nan)
+        apply_replace("Dissolved Oxygen (mg/L) Average", np.array(mean_do, dtype=object),
+                      note="DOavg→mean(DO1,DO2) rounded(0.1); ")
+    apply_replace("Salinity (ppt)",           map_from(c_annot, "Salinity Formatted"),
+                  note="Salinity→standardized display; ")
+
+    # From ECOLI: E. Coli Rounded (int→2SF)
+    apply_replace("E. Coli Average",         map_from(e_annot, "E. Coli Rounded (int→2SF)"),
+                  note="E.coli→int→2SF; ")
+
+    # From ADVANCED: Discharge Recorded (already formatted there)
+    apply_replace("Discharge Recorded",      map_from(a_annot, "Discharge Recorded"),
+                  note="Discharge→formatted; ")
+
+    # Recompute CFU if inputs present
+    def recompute_cfu(prefix):
+        cols = [f"{prefix}: Colonies Counted",
+                f"{prefix}: Dilution Factor (Manual)",
+                f"{prefix}: Sample Size (mL)",
+                f"{prefix}: Colony Forming Units per 100mL"]
+        if not all(c in rep.columns for c in cols):
+            return
+        try:
+            count = pd.to_numeric(rep[cols[0]], errors="coerce")
+            dil   = pd.to_numeric(rep[cols[1]], errors="coerce")
+            vol   = pd.to_numeric(rep[cols[2]], errors="coerce")
+            calc  = (count * dil * 100) / vol
+            mask  = pd.notna(calc)
+            rep.loc[mask, cols[3]] = calc[mask].round(0)
+            rep.loc[mask, "Repaired_ChangeLog"] += f"{prefix} CFU→recomputed; "
+        except Exception:
+            pass
+    for px in ["Sample 1", "Sample 2"]:
+        recompute_cfu(px)
+
+    # Conductivity header alias: ?S/cm → µS/cm
+    if "Conductivity (?S/cm)" in rep.columns and "Conductivity (µS/cm)" not in rep.columns:
+        rep.rename(columns={"Conductivity (?S/cm)": "Conductivity (µS/cm)"}, inplace=True)
+        rep["Repaired_ChangeLog"] += "Conductivity header→µS/cm; "
+
+    # Unit normalization: nitrate/phosphate ppm→mg/L (no numeric change for freshwater)
+    unit_col = "ResultMeasure/MeasureUnitCode"
+    param_col = "CharacteristicName"
+    if unit_col in rep.columns and param_col in rep.columns:
+        u = rep[unit_col].astype(str).str.lower()
+        p = rep[param_col].astype(str).str.lower()
+        mask_ppm = u.eq("ppm") & (p.str.contains("phosphate") | p.str.contains("nitrate"))
+        if mask_ppm.any():
+            rep.loc[mask_ppm, unit_col] = "mg/L"
+            rep.loc[mask_ppm, "Repaired_ChangeLog"] += "Unit ppm→mg/L; "
+
+    # Drop duplicates on identity keys
+    key_cols = [c for c in ["Group or Affiliation","Site ID: Site Name","Sample Date","Sample Time Final Format"] if c in rep.columns]
+    if len(key_cols) >= 2:
+        rep = rep.drop_duplicates(subset=key_cols, keep="first")
+        rep["Repaired_ChangeLog"] += "Duplicates dropped; "
+
+    rep.drop(columns=["_key_"], inplace=True, errors="ignore")
+    return rep
+
 # -------------------- GENERAL --------------------
 def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     df = df0.copy()
@@ -206,24 +310,23 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     cond_col = get_cond_col(df)
 
-    # --- Duplicates (based on key columns) ---
+    # Duplicates based on identity
     key_cols = [c for c in ["Group or Affiliation","Site ID: Site Name","Sample Date","Sample Time Final Format"] if c in df.columns]
     if len(key_cols) >= 2:
         dup_mask = df.duplicated(subset=key_cols, keep="first")
         df.loc[dup_mask, "ValidationNotes"] += "Duplicate row (same site/date/time); "
-        # mark for deletion
         row_delete_indices = set(df[dup_mask].index.tolist())
     else:
         row_delete_indices = set()
 
-    # --- Flagged rows (columns containing 'flag') ---
+    # Flagged rows (any column name that contains 'flag')
     flag_cols = [c for c in df.columns if "flag" in c.lower()]
     if flag_cols:
         fl_mask = df[flag_cols].applymap(is_truthy_flag).any(axis=1)
         df.loc[fl_mask, "ValidationNotes"] += "Row flagged by data flag column; "
         row_delete_indices.update(df[fl_mask].index.tolist())
 
-    # --- Watershed site count ---
+    # Watershed site count
     if "Group or Affiliation" in df.columns and "Site ID: Site Name" in df.columns:
         site_counts = df.groupby("Group or Affiliation")["Site ID: Site Name"].nunique()
         invalid_ws = site_counts[site_counts < 3].index
@@ -232,7 +335,7 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df.loc[mask, "ValidationColorKey"] += "watershed_or_events;"
         row_delete_indices.update(df[mask].index.tolist())
 
-    # --- Site event count ---
+    # Site event count
     if "Site ID: Site Name" in df.columns and "Sample Date" in df.columns:
         df["Sample Date"] = pd.to_datetime(df["Sample Date"], errors="coerce")
         event_counts = df.groupby("Site ID: Site Name")["Sample Date"].nunique()
@@ -242,26 +345,24 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df.loc[mask, "ValidationColorKey"] += "watershed_or_events;"
         row_delete_indices.update(df[mask].index.tolist())
 
-    # --- Invalid Sample Date ---
+    # Invalid Sample Date
     if "Sample Date" in df.columns:
         mask = df["Sample Date"].isna()
         df.loc[mask, "ValidationNotes"] += "Missing or invalid Sample Date; "
         df.loc[mask, "ValidationColorKey"] += "time;"
         row_delete_indices.update(df[mask].index.tolist())
 
-    # --- Sample Time format + Midday window note ---
+    # Sample Time parsing + midday note
     if "Sample Time Final Format" in df.columns:
-        # unparsable time
         mask_bad = df["Sample Time Final Format"].apply(lambda t: parse_hour_from_time_string(t) is None)
         df.loc[mask_bad, "ValidationNotes"] += "Unparsable Sample Time; "
         df.loc[mask_bad, "ValidationColorKey"] += "time;"
         row_delete_indices.update(df[mask_bad].index.tolist())
-        # midday (12-16) warning (note only)
         hours = df["Sample Time Final Format"].apply(parse_hour_from_time_string)
         mask_mid = hours.apply(lambda h: (h is not None) and (12 <= h < 16))
         df.loc[mask_mid, "ValidationNotes"] += "Sample time in 12:00–16:00 window (verify consistency); "
 
-    # --- Missing core params (all) ---
+    # Missing all core params
     core_params = [
         "pH (standard units)",
         "Dissolved Oxygen (mg/L) Average",
@@ -279,14 +380,12 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             df.at[idx, "ValidationColorKey"] += "range;"
             row_delete_indices.add(idx)
 
-    # --- Standard ranges & note texts ---
+    # Standard ranges & texts
     standard_ranges = {}
     note_texts = {}
-    # Build with conditional conductivity key
     if cond_col:
         standard_ranges[cond_col] = (50, 1500)
         note_texts[cond_col] = "Conductivity out of range [50–1500]; "
-    # Others
     extra = {
         "pH (standard units)": ((6.5, 9.0), "pH out of range [6.5–9.0]; "),
         "Dissolved Oxygen (mg/L) Average": ((5.0, 14.0), "DO out of range [5.0–14.0]; "),
@@ -312,7 +411,7 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             df.loc[mask, "ValidationColorKey"] += "range;"
             df.loc[mask, col] = np.nan
 
-    # --- Contextual outliers (per site) ---
+    # Contextual outliers per site
     if "Site ID: Site Name" in df.columns:
         for col in standard_ranges:
             if col in df.columns:
@@ -326,14 +425,14 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                 df.loc[idxs, "ValidationColorKey"] += "contextual_outlier;"
                 df.loc[idxs, col] = np.nan
 
-    # --- Expired reagents ---
+    # Expired reagents
     if "Chemical Reagents Used" in df.columns:
         mask = df["Chemical Reagents Used"].astype(str).str.contains("expired", case=False, na=False)
         df.loc[mask, "ValidationNotes"] += "Expired reagents used; "
         df.loc[mask, "ValidationColorKey"] += "expired;"
         df.loc[mask, "Chemical Reagents Used"] = np.nan
 
-    # --- Comments required if flagged ---
+    # Comments required if flagged
     if "Comments" in df.columns:
         empty = df["Comments"].isna() | (df["Comments"].astype(str).str.strip() == "")
         flagged = df["ValidationNotes"] != ""
@@ -341,17 +440,17 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df.loc[mask, "ValidationNotes"] += "No explanation in Comments; "
         df.loc[mask, "ValidationColorKey"] += "comments;"
 
-    # --- Remove 'valid/invalid' strings globally ---
+    # Remove 'valid/invalid' everywhere
     replaced = df.replace(to_replace=r'(?i)\b(valid|invalid)\b', value='', regex=True)
     changed = replaced != df
     df.update(replaced)
     df.loc[changed.any(axis=1), "TransformNotes"] += "Removed 'valid/invalid'; "
 
-    # --- Sort ---
+    # Sort
     if "Site ID: Site Name" in df.columns and "Sample Date" in df.columns:
         df.sort_values(by=["Site ID: Site Name", "Sample Date"], inplace=True)
 
-    # --- Cleaned ---
+    # Cleaned
     df_clean = df.drop(index=list(row_delete_indices))
     return df_clean, df
 
@@ -381,13 +480,16 @@ def run_core(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df.loc[mask, "CORE_Notes"] += "Zero Depth with non-dry flow; "
         row_delete_indices.update(df[mask].index.tolist())
 
-    # DO titration difference
+    # DO titration presence + difference
     do1, do2 = "Dissolved Oxygen (mg/L) 1st titration", "Dissolved Oxygen (mg/L) 2nd titration"
-    if do1 in df.columns and do2 in df.columns:
+    has1, has2 = (do1 in df.columns), (do2 in df.columns)
+    if has1 ^ has2:
+        missing = do1 if not has1 else do2
+        df["CORE_Notes"] += f"Missing DO titration column: {missing}; "
+    if has1 and has2:
         diff = (df[do1] - df[do2]).abs()
         mask = diff > 0.5
         df.loc[mask, "CORE_Notes"] += "DO Difference > 0.5; "
-        # Round to 0.1
         df["DO1 Rounded"] = pd.to_numeric(df[do1], errors="coerce").round(1)
         df["DO2 Rounded"] = pd.to_numeric(df[do2], errors="coerce").round(1)
         df["CORE_ChangeNotes"] += "Rounded DO to 0.1; "
@@ -421,17 +523,12 @@ def run_core(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                 continue
             # Pre
             for c in pre_time_cols:
-                pre_dt = try_parse_datetime(row.get(c))
-                if pre_dt is None:
-                    # maybe only time given – combine with sample date
-                    pre_dt = try_parse_datetime(row.get("Sample Date"), row.get(c))
+                pre_dt = try_parse_datetime(row.get(c)) or try_parse_datetime(row.get("Sample Date"), row.get(c))
                 if pre_dt is not None and abs((samp_dt - pre_dt).total_seconds()) > 24*3600:
                     df.at[idx, "CORE_Notes"] += f"Pre-calibration time >24h from sample ({c}); "
             # Post
             for c in post_time_cols:
-                post_dt = try_parse_datetime(row.get(c))
-                if post_dt is None:
-                    post_dt = try_parse_datetime(row.get("Sample Date"), row.get(c))
+                post_dt = try_parse_datetime(row.get(c)) or try_parse_datetime(row.get("Sample Date"), row.get(c))
                 if post_dt is not None and abs((post_dt - samp_dt).total_seconds()) > 24*3600:
                     df.at[idx, "CORE_Notes"] += f"Post-calibration time >24h from sample ({c}); "
 
@@ -523,7 +620,7 @@ def run_ecoli(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df.loc[mask, "ECOLI_ValidationNotes"] += "E. coli = 0; "
         df.loc[mask, col_ecoli] = np.nan
 
-        # Two-step rounding: nearest integer, then 2 significant figures
+        # Two-step rounding: nearest integer → 2 significant figures
         def round_to_2sf_after_int(n):
             if pd.isna(n):
                 return n
@@ -531,7 +628,6 @@ def run_ecoli(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                 n_int = int(round(float(n)))
                 if n_int == 0:
                     return 0
-                # round to 2 significant figures
                 k = int(np.floor(np.log10(abs(n_int))))
                 return int(round(n_int, -k + 1))
             except:
@@ -578,7 +674,7 @@ def run_adv(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     def log_issue(idx, text):
         df.at[idx, "ADVANCED_ValidationNotes"] += text + "; "
 
-    # Column-level names that include units in their title
+    # Column name checks (labels)
     phosphate_cols = [c for c in df.columns if "phosphate" in c.lower() and "value" in c.lower() and c not in all_zero_cols]
     for c in phosphate_cols:
         if ("mg/l" not in c.lower()) and ("ppm" not in c.lower()):
@@ -684,10 +780,8 @@ def run_rip(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                 if comments in ["", "n/a", "na", "none"]:
                     log_issue(idx, f"{c} missing without explanation")
                 else:
-                    # keep row; clear the cell only
-                    df.at[idx, c] = np.nan
+                    df.at[idx, c] = np.nan  # keep row; clear the cell
                 missing_count += 1
-        # Aggregate note if several indicators missing and comments empty
         if missing_count > 0:
             comments = str(row.get("Comments", "")).strip().lower()
             if comments in ["", "n/a", "na", "none"]:
@@ -858,10 +952,10 @@ with tabs[5]:
                 st.download_button("📥 Download annotated_RIPARIAN.xlsx", data=open(p_annot, "rb").read(),
                                    file_name="annotated_RIPARIAN.xlsx")
 
-# ------------------------ 7) RUN ALL + FINAL COMBINED ------------------------
+# ------------------------ 7) RUN ALL + FINAL COMBINED/REPAIRED ------------------------
 with tabs[6]:
     st.header("🚀 Run All (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)")
-    st.caption("Runs the entire pipeline and produces all cleaned/annotated outputs + a single Final_Combined.xlsx + a ZIP.")
+    st.caption("Runs the entire pipeline and produces all cleaned/annotated outputs + Final_Combined.xlsx + Final_Repaired.xlsx + a ZIP.")
 
     if not isinstance(st.session_state.df_original, pd.DataFrame):
         st.info("Upload a file in the first tab.")
@@ -906,7 +1000,7 @@ with tabs[6]:
             p_r_annot = path_with_suffix(base, "annotated_RIPARIAN")
             save_excel(r_clean, p_r_clean); save_excel(r_annot, p_r_annot)
 
-            # 6) Final combined
+            # 6) Final combined (notes merged)
             final_base = r_clean if not r_clean.empty else (a_clean if not a_clean.empty else g_clean)
             df_final = build_final_combined(
                 base_df=final_base,
@@ -919,25 +1013,43 @@ with tabs[6]:
             p_final = path_with_suffix(base, "Final_Combined")
             save_excel(df_final, p_final)
 
-            st.success("✅ All steps completed. Final combined file is ready.")
-            st.download_button("📥 Download Final_Combined.xlsx",
-                               data=open(p_final, "rb").read(),
-                               file_name="Final_Combined.xlsx")
-
-            # 7) ZIP all outputs (including Final_Combined)
-            mem_zip = io.BytesIO()
-            with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-                for path in [p_g_clean, p_g_annot, p_c_clean, p_c_annot, p_e_clean, p_e_annot,
-                             p_a_clean, p_a_annot, p_r_clean, p_r_annot, p_final]:
-                    if os.path.exists(path):
-                        zf.write(path, arcname=os.path.basename(path))
-            mem_zip.seek(0)
-            st.download_button(
-                "📦 Download ALL outputs (ZIP incl. Final_Combined)",
-                data=mem_zip.getvalue(),
-                file_name=f"Validation_Outputs_{datetime.now().strftime('%Y%m%d_%H%M')}.zip",
-                mime="application/zip",
+            # 7) Final repaired (values actually fixed)
+            df_repaired = build_repaired_dataset(
+                base_df=final_base,
+                g_annot=g_annot,
+                c_annot=c_annot,
+                e_annot=e_annot,
+                a_annot=a_annot,
+                r_annot=r_annot
             )
+            p_repaired = path_with_suffix(base, "Final_Repaired")
+            save_excel(df_repaired, p_repaired)
+
+            st.success("✅ All steps completed. Final files are ready.")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.download_button("📥 Download Final_Combined.xlsx",
+                                   data=open(p_final, "rb").read(),
+                                   file_name="Final_Combined.xlsx")
+            with c2:
+                st.download_button("🛠️ Download Final_Repaired.xlsx",
+                                   data=open(p_repaired, "rb").read(),
+                                   file_name="Final_Repaired.xlsx")
+            with c3:
+                # ZIP all outputs (including Final_Combined & Final_Repaired)
+                mem_zip = io.BytesIO()
+                with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    for path in [p_g_clean, p_g_annot, p_c_clean, p_c_annot, p_e_clean, p_e_annot,
+                                 p_a_clean, p_a_annot, p_r_clean, p_r_annot, p_final, p_repaired]:
+                        if os.path.exists(path):
+                            zf.write(path, arcname=os.path.basename(path))
+                mem_zip.seek(0)
+                st.download_button(
+                    "📦 Download ALL outputs (ZIP incl. Final_Combined & Final_Repaired)",
+                    data=mem_zip.getvalue(),
+                    file_name=f"Validation_Outputs_{datetime.now().strftime('%Y%m%d_%H%M')}.zip",
+                    mime="application/zip",
+                )
 
 # ------------------------ 8) GUIDE ------------------------
 with tabs[7]:
