@@ -89,6 +89,7 @@ def build_final_combined(base_df: pd.DataFrame,
                          r_annot: Optional[pd.DataFrame]) -> pd.DataFrame:
     """
     Merge step notes/change-notes onto final base_df and create All_Notes / All_ChangeNotes.
+    Collision-safe: renames incoming value column to the target label before merge.
     """
     final = base_df.copy()
     final["_key_"] = make_key(final)
@@ -120,12 +121,17 @@ def build_final_combined(base_df: pd.DataFrame,
         if blk is None:
             final[label] = ""
             continue
-        value_col = [c for c in blk.columns if c != "_key_"][0]
-        final = final.merge(blk[["_key_", value_col]], on="_key_", how="left")
-        final[label] = final[value_col].fillna("")
-        final.drop(columns=[value_col], inplace=True, errors="ignore")
+        val_cols = [c for c in blk.columns if c != "_key_"]
+        if not val_cols:
+            final[label] = ""
+            continue
+        value_col = val_cols[0]
+        # جلوگیری از _x/_y: قبل از merge به نام مقصد تغییر نام بده
+        blk_ren = blk[["_key_", value_col]].rename(columns={value_col: label})
+        final = final.merge(blk_ren, on="_key_", how="left")
+        final[label] = final[label].fillna("")
 
-    # Aggregate notes
+    # تجمیع نوت‌ها
     def cat_cols(row, cols):
         vals = [str(row[c]).strip() for c in cols if c in row.index and str(row[c]).strip() != ""]
         return " | ".join(vals)
