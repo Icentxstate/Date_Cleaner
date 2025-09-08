@@ -849,7 +849,7 @@ with tabs[5]:
 # ------------------------ 7) RUN ALL + FINAL COMBINED ------------------------
 with tabs[6]:
     st.header("🚀 Run All (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)")
-    st.caption("Final_Combined is generated. (منطق حذفِ دادهٔ پرت 3×IQR حذف شده است.)")
+    st.caption("Final_Combined is generated. ")
 
     if not isinstance(st.session_state.df_original, pd.DataFrame):
         st.info("Upload a file in the first tab.")
