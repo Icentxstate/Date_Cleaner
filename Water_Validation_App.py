@@ -113,6 +113,24 @@ def is_truthy_flag(val) -> bool:
     s = str(val).strip().lower()
     return s in {"y","yes","true","1","flag","flagged","invalid","bad","exclude","remove"}
 
+def mask_extreme_outliers_df(df_in: pd.DataFrame, k: float = 3.0) -> pd.DataFrame:
+    """
+    سلول‌های پرت شدید را با آستانه 3×IQR به صورت cell-wise NaN می‌کند.
+    فقط ستون‌های عددی تحت تأثیر قرار می‌گیرند؛ سایر ستون‌ها دست‌نخورده می‌مانند.
+    """
+    df = df_in.copy()
+    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    for c in numeric_cols:
+        x = pd.to_numeric(df[c], errors="coerce")
+        q1, q3 = x.quantile(0.25), x.quantile(0.75)
+        iqr = q3 - q1
+        if pd.isna(iqr) or iqr == 0:
+            df[c] = x
+            continue
+        low, high = q1 - k*iqr, q3 + k*iqr
+        df[c] = x.where((x >= low) & (x <= high), np.nan)
+    return df
+
 # -------------------- Key builder for merges --------------------
 def make_key(df: pd.DataFrame) -> pd.Series:
     cols = []
@@ -953,9 +971,10 @@ with tabs[5]:
                                    file_name="annotated_RIPARIAN.xlsx")
 
 # ------------------------ 7) RUN ALL + FINAL COMBINED/REPAIRED ------------------------
+# ------------------------ 7) RUN ALL + FINAL COMBINED/REPAIRED ------------------------
 with tabs[6]:
     st.header("🚀 Run All (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)")
-    st.caption("Runs the entire pipeline and produces all cleaned/annotated outputs + Final_Combined.xlsx + Final_Repaired.xlsx + a ZIP.")
+    st.caption("Final_Combined ساخته می‌شود و Final_Repaired فقط با حذف پرت‌های شدید (3×IQR) از Final_Combined تولید می‌شود.")
 
     if not isinstance(st.session_state.df_original, pd.DataFrame):
         st.info("Upload a file in the first tab.")
@@ -1013,16 +1032,13 @@ with tabs[6]:
             p_final = path_with_suffix(base, "Final_Combined")
             save_excel(df_final, p_final)
 
-            # 7) Final repaired (values actually fixed)
-            df_repaired = build_repaired_dataset(
-                base_df=final_base,
-                g_annot=g_annot,
-                c_annot=c_annot,
-                e_annot=e_annot,
-                a_annot=a_annot,
-                r_annot=r_annot
-            )
-            p_repaired = path_with_suffix(base, "Final_Repaired")
+            # ⬇️ ذخیره در سشن برای دکمهٔ مستقل Outlier Repair
+            st.session_state.df_final_combined = df_final.copy()
+            st.session_state.p_final_combined = p_final
+
+            # 7) Final_Repaired = فقط حذف پرت‌های شدید از Final_Combined (۳×IQR، cell-wise)
+            df_repaired = mask_extreme_outliers_df(df_final, k=3.0)
+            p_repaired = path_with_suffix(base, "Final_Repaired")  # همان نام خروجی مدنظر
             save_excel(df_repaired, p_repaired)
 
             st.success("✅ All steps completed. Final files are ready.")
@@ -1032,11 +1048,11 @@ with tabs[6]:
                                    data=open(p_final, "rb").read(),
                                    file_name="Final_Combined.xlsx")
             with c2:
-                st.download_button("🛠️ Download Final_Repaired.xlsx",
+                st.download_button("🛠️ Download Final_Repaired.xlsx (3×IQR cell-wise)",
                                    data=open(p_repaired, "rb").read(),
                                    file_name="Final_Repaired.xlsx")
             with c3:
-                # ZIP all outputs (including Final_Combined & Final_Repaired)
+                # ZIP all outputs
                 mem_zip = io.BytesIO()
                 with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
                     for path in [p_g_clean, p_g_annot, p_c_clean, p_c_annot, p_e_clean, p_e_annot,
@@ -1050,6 +1066,43 @@ with tabs[6]:
                     file_name=f"Validation_Outputs_{datetime.now().strftime('%Y%m%d_%H%M')}.zip",
                     mime="application/zip",
                 )
+
+    st.divider()
+    st.subheader("🔧 فقط Outlier Repair از Final_Combined (بدون اجرای کل مراحل)")
+    st.caption("اگر قبلاً Run All را زده‌ای (یا فایل Final_Combined آماده داری)، می‌توانی صرفاً حذف پرت‌های شدید (۳×IQR) را اجرا کنی.")
+
+    # اگر در همین سشن Final_Combined ساخته شده باشد:
+    df_fc = st.session_state.get("df_final_combined", None)
+    if df_fc is not None:
+        if st.button("🧹 Apply 3×IQR Outlier Repair on current Final_Combined and Download"):
+            df_rep2 = mask_extreme_outliers_df(df_fc, k=3.0)
+            bio = io.BytesIO()
+            with pd.ExcelWriter(bio, engine="openpyxl") as w:
+                df_rep2.to_excel(w, index=False, sheet_name="Repaired")
+            bio.seek(0)
+            st.download_button(
+                "📥 Download Final_Repaired.xlsx",
+                data=bio.getvalue(),
+                file_name="Final_Repaired.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+    else:
+        # امکان آپلود مستقیم Final_Combined برای فقط همین مرحله
+        up2 = st.file_uploader("یا Final_Combined.xlsx را اینجا آپلود کن", type=["xlsx"], key="fc_only")
+        if up2 and st.button("🧹 Apply 3×IQR Outlier Repair (uploaded Final_Combined)"):
+            df_up = pd.read_excel(up2, engine="openpyxl")
+            df_rep2 = mask_extreme_outliers_df(df_up, k=3.0)
+            bio = io.BytesIO()
+            with pd.ExcelWriter(bio, engine="openpyxl") as w:
+                df_rep2.to_excel(w, index=False, sheet_name="Repaired")
+            bio.seek(0)
+            st.download_button(
+                "📥 Download Final_Repaired.xlsx",
+                data=bio.getvalue(),
+                file_name="Final_Repaired.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
 
 # ------------------------ 8) GUIDE ------------------------
 with tabs[7]:
