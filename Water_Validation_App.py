@@ -972,10 +972,9 @@ with tabs[5]:
                                    file_name="annotated_RIPARIAN.xlsx")
 
 # ------------------------ 7) RUN ALL + FINAL COMBINED/REPAIRED ------------------------
-# ------------------------ 7) RUN ALL (ONLY Final_Combined) ------------------------
 with tabs[6]:
     st.header("🚀 Run All (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)")
-    st.caption("Only Final_Combined.xlsx will be generated (merged notes across stages).")
+    st.caption("Final_Combined is generated, and Final_Repaired is produced only by removing extreme outliers (3×IQR) from Final_Combined.")
 
     if not isinstance(st.session_state.df_original, pd.DataFrame):
         st.info("Upload a file in the first tab.")
@@ -985,22 +984,42 @@ with tabs[6]:
 
             # 1) GENERAL
             g_clean, g_annot = run_general(st.session_state.df_original)
+            st.session_state.df_general_clean, st.session_state.df_general_annot = g_clean, g_annot
+            p_g_clean = path_with_suffix(base, "cleaned_GENERAL")
+            p_g_annot = path_with_suffix(base, "annotated_GENERAL")
+            save_excel(g_clean, p_g_clean); save_excel(g_annot, p_g_annot)
 
             # 2) CORE (on GENERAL-clean)
             c_clean, c_annot = run_core(g_clean)
+            st.session_state.df_core_clean, st.session_state.df_core_annot = c_clean, c_annot
+            p_c_clean = path_with_suffix(base, "cleaned_CORE")
+            p_c_annot = path_with_suffix(base, "annotated_CORE")
+            save_excel(c_clean, p_c_clean); save_excel(c_annot, p_c_annot)
 
             # 3) ECOLI (on GENERAL-clean)
             e_clean, e_annot = run_ecoli(g_clean)
+            st.session_state.df_ecoli_clean, st.session_state.df_ecoli_annot = e_clean, e_annot
+            p_e_clean = path_with_suffix(base, "cleaned_ECOLI")
+            p_e_annot = path_with_suffix(base, "annotated_ECOLI")
+            save_excel(e_clean, p_e_clean); save_excel(e_annot, p_e_annot)
 
-            # 4) ADVANCED (on ECOLI-clean if not empty else GENERAL-clean)
+            # 4) ADVANCED (on ECOLI-clean if not empty, else GENERAL-clean)
             a_source = e_clean if not e_clean.empty else g_clean
             a_clean, a_annot = run_adv(a_source)
+            st.session_state.df_adv_clean, st.session_state.df_adv_annot = a_clean, a_annot
+            p_a_clean = path_with_suffix(base, "cleaned_ADVANCED")
+            p_a_annot = path_with_suffix(base, "annotated_ADVANCED")
+            save_excel(a_clean, p_a_clean); save_excel(a_annot, p_a_annot)
 
-            # 5) RIPARIAN (on ADVANCED-clean if not empty else GENERAL-clean)
+            # 5) RIPARIAN (on ADVANCED-clean if not empty, else GENERAL-clean)
             r_source = a_clean if not a_clean.empty else g_clean
             r_clean, r_annot = run_rip(r_source)
+            st.session_state.df_rip_clean, st.session_state.df_rip_annot = r_clean, r_annot
+            p_r_clean = path_with_suffix(base, "cleaned_RIPARIAN")
+            p_r_annot = path_with_suffix(base, "annotated_RIPARIAN")
+            save_excel(r_clean, p_r_clean); save_excel(r_annot, p_r_annot)
 
-            # 6) Final_Combined (notes merged from all annot dfs)
+            # 6) Final_Combined (merge notes from all annotated DataFrames)
             final_base = r_clean if not r_clean.empty else (a_clean if not a_clean.empty else g_clean)
             df_final = build_final_combined(
                 base_df=final_base,
@@ -1010,86 +1029,86 @@ with tabs[6]:
                 a_annot=a_annot,
                 r_annot=r_annot
             )
-
-            # Save only Final_Combined.xlsx
             p_final = path_with_suffix(base, "Final_Combined")
             save_excel(df_final, p_final)
 
-            # keep in session (optional)
+            # Keep in session for the standalone Outlier Repair button below
             st.session_state.df_final_combined = df_final.copy()
             st.session_state.p_final_combined = p_final
 
-            st.success("✅ Final_Combined.xlsx is ready.")
-            st.download_button(
-                "📥 Download Final_Combined.xlsx",
-                data=open(p_final, "rb").read(),
-                file_name="Final_Combined.xlsx"
-            )
-# ------------------------ 8) حذف داده های پرت ------------------------
-# ------------------------ 8) حذف داده های پرت ------------------------
-with tabs[7]:
-    st.header("🧹 حذف داده‌های پرت (Extreme Outliers) از Final_Combined")
-    st.caption("فقط سلول‌های پرت شدید خارج از بازه Q1±k×IQR به‌صورت cell-wise خالی (NaN) می‌شوند. هیچ سطری حذف نمی‌شود.")
+            # 7) Final_Repaired = cell-wise extreme outlier removal (3×IQR) from Final_Combined
+            df_repaired = mask_extreme_outliers_df(df_final, k=3.0)
+            p_repaired = path_with_suffix(base, "Final_Repaired")
+            save_excel(df_repaired, p_repaired)
 
-    # تنظیم آستانه
-    k = st.slider("ضریب k برای IQR", min_value=2.0, max_value=5.0, value=3.0, step=0.5)
+            st.success("✅ All steps completed. Final files are ready.")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.download_button(
+                    "📥 Download Final_Combined.xlsx",
+                    data=open(p_final, "rb").read(),
+                    file_name="Final_Combined.xlsx"
+                )
+            with c2:
+                st.download_button(
+                    "🛠️ Download Final_Repaired.xlsx (3×IQR, cell-wise)",
+                    data=open(p_repaired, "rb").read(),
+                    file_name="Final_Repaired.xlsx"
+                )
+            with c3:
+                # ZIP all outputs
+                mem_zip = io.BytesIO()
+                with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    for path in [
+                        p_g_clean, p_g_annot, p_c_clean, p_c_annot, p_e_clean, p_e_annot,
+                        p_a_clean, p_a_annot, p_r_clean, p_r_annot, p_final, p_repaired
+                    ]:
+                        if os.path.exists(path):
+                            zf.write(path, arcname=os.path.basename(path))
+                mem_zip.seek(0)
+                st.download_button(
+                    "📦 Download ALL outputs (ZIP incl. Final_Combined & Final_Repaired)",
+                    data=mem_zip.getvalue(),
+                    file_name=f"Validation_Outputs_{datetime.now().strftime('%Y%m%d_%H%M')}.zip",
+                    mime="application/zip",
+                )
 
-    # منبع: از سشن (خروجی تب ۷) یا آپلود
+    st.divider()
+    st.subheader("🔧 Outlier Repair Only from Final_Combined (without running all steps)")
+    st.caption("If you have already run “Run All” (or have a Final_Combined file ready), you can simply perform extreme outlier removal (3×IQR).")
+
+    # If Final_Combined was produced in this session:
     df_fc = st.session_state.get("df_final_combined", None)
-
     if df_fc is not None:
-        st.success("Final_Combined از تب ۷ در دسترس است.")
-        if st.button("🧹 اجرا روی Final_Combined فعلی و آماده‌سازی دانلود"):
-            # شمارش قبل/بعد برای گزارش
-            numeric_cols = [c for c in df_fc.columns if pd.api.types.is_numeric_dtype(df_fc[c])]
-            before_non_null = df_fc[numeric_cols].count().sum()
-
-            df_rep = mask_extreme_outliers_df(df_fc, k=float(k))
-
-            after_non_null = df_rep[numeric_cols].count().sum()
-            n_masked = int(before_non_null - after_non_null)
-            st.info(f"سلول‌های عددی خالی‌شده به‌عنوان پرت شدید: {n_masked}")
-
-            # ذخیره به‌صورت فایل دانلودی
+        if st.button("🧹 Apply 3×IQR Outlier Repair on current Final_Combined and Download"):
+            df_rep2 = mask_extreme_outliers_df(df_fc, k=3.0)
             bio = io.BytesIO()
             with pd.ExcelWriter(bio, engine="openpyxl") as w:
-                df_rep.to_excel(w, index=False, sheet_name="Repaired")
+                df_rep2.to_excel(w, index=False, sheet_name="Repaired")
             bio.seek(0)
-
             st.download_button(
                 "📥 Download Final_Repaired.xlsx",
                 data=bio.getvalue(),
                 file_name="Final_Repaired.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-
     else:
-        st.warning("Final_Combined در سشن موجود نیست. می‌توانید فایل Final_Combined.xlsx را بارگذاری کنید.")
-        up_fc = st.file_uploader("یا Final_Combined.xlsx را اینجا آپلود کن", type=["xlsx"], key="fc_upload_tab8")
-
-        if up_fc and st.button("🧹 اجرا روی فایل آپلودی و آماده‌سازی دانلود"):
-            df_up = pd.read_excel(up_fc, engine="openpyxl")
-
-            numeric_cols = [c for c in df_up.columns if pd.api.types.is_numeric_dtype(df_up[c])]
-            before_non_null = df_up[numeric_cols].count().sum()
-
-            df_rep = mask_extreme_outliers_df(df_up, k=float(k))
-
-            after_non_null = df_rep[numeric_cols].count().sum()
-            n_masked = int(before_non_null - after_non_null)
-            st.info(f"سلول‌های عددی خالی‌شده به‌عنوان پرت شدید: {n_masked}")
-
+        # Allow direct upload of Final_Combined for this specific step
+        up2 = st.file_uploader("Or upload Final_Combined.xlsx here", type=["xlsx"], key="fc_only")
+        if up2 and st.button("🧹 Apply 3×IQR Outlier Repair (uploaded Final_Combined)"):
+            df_up = pd.read_excel(up2, engine="openpyxl")
+            df_rep2 = mask_extreme_outliers_df(df_up, k=3.0)
             bio = io.BytesIO()
             with pd.ExcelWriter(bio, engine="openpyxl") as w:
-                df_rep.to_excel(w, index=False, sheet_name="Repaired")
+                df_rep2.to_excel(w, index=False, sheet_name="Repaired")
             bio.seek(0)
-
             st.download_button(
                 "📥 Download Final_Repaired.xlsx",
                 data=bio.getvalue(),
                 file_name="Final_Repaired.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
 # ------------------------ 9) GUIDE ------------------------
 with tabs[7]:
     st.header("📘 Download Data Cleaning Guide")
