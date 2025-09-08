@@ -1088,7 +1088,7 @@ with tabs[6]:
             )
     else:
         # امکان آپلود مستقیم Final_Combined برای فقط همین مرحله
-        up2 = st.file_uploader("یا Final_Combined.xlsx را اینجا آپلود کن", type=["xlsx"], key="fc_only")
+        up2 = st.file_uploader("Or upload Final_Combined.xlsx here ", type=["xlsx"], key="fc_only")
         if up2 and st.button("🧹 Apply 3×IQR Outlier Repair (uploaded Final_Combined)"):
             df_up = pd.read_excel(up2, engine="openpyxl")
             df_rep2 = mask_extreme_outliers_df(df_up, k=3.0)
