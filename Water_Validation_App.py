@@ -46,6 +46,7 @@ def init_state():
         "df_ecoli_clean","df_ecoli_annot",
         "df_adv_clean","df_adv_annot",
         "df_rip_clean","df_rip_annot",
+        "df_final_combined","p_final_combined",
     ]:
         st.session_state.setdefault(k, None)
 init_state()
@@ -65,7 +66,7 @@ def parse_hour_from_time_string(t) -> Optional[int]:
     try:
         s = str(t).strip()
         m = re.match(r"^(\d{1,2})[:\.]?(\d{2})?", s)  # HH:MM / H:MM / HHMM
-        if not m: 
+        if not m:
             return None
         h = int(m.group(1))
         return h if 0 <= h <= 23 else None
@@ -790,7 +791,7 @@ def run_rip(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     for idx, row in df.iterrows():
         missing_count = 0
         for c in available_cols:
-            if c in zeroed_columns: 
+            if c in zeroed_columns:
                 continue
             val = row.get(c)
             if pd.isna(val) or str(val).strip() == "":
@@ -1032,7 +1033,7 @@ with tabs[6]:
             p_final = path_with_suffix(base, "Final_Combined")
             save_excel(df_final, p_final)
 
-            # Keep in session for the standalone Outlier Repair button below
+            # Keep in session for the standalone Outlier Repair tab
             st.session_state.df_final_combined = df_final.copy()
             st.session_state.p_final_combined = p_final
 
@@ -1073,13 +1074,14 @@ with tabs[6]:
                     mime="application/zip",
                 )
 
-    st.divider()
-    st.subheader("🔧 Outlier Repair Only from Final_Combined (without running all steps)")
-    st.caption("If you have already run “Run All” (or have a Final_Combined file ready), you can simply perform extreme outlier removal (3×IQR).")
+# ------------------------ 8) OUTLIER REMOVAL (own tab) ------------------------
+with tabs[7]:
+    st.header("🧹 Outlier Removal")
+    st.caption("Apply 3×IQR cell-wise outlier masking to an existing Final_Combined dataset.")
 
-    # If Final_Combined was produced in this session:
     df_fc = st.session_state.get("df_final_combined", None)
     if df_fc is not None:
+        st.subheader("Use Final_Combined produced in this session")
         if st.button("🧹 Apply 3×IQR Outlier Repair on current Final_Combined and Download"):
             df_rep2 = mask_extreme_outliers_df(df_fc, k=3.0)
             bio = io.BytesIO()
@@ -1093,8 +1095,8 @@ with tabs[6]:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
     else:
-        # Allow direct upload of Final_Combined for this specific step
-        up2 = st.file_uploader("Or upload Final_Combined.xlsx here", type=["xlsx"], key="fc_only")
+        st.subheader("Upload a Final_Combined.xlsx")
+        up2 = st.file_uploader("Upload Final_Combined.xlsx", type=["xlsx"], key="fc_only")
         if up2 and st.button("🧹 Apply 3×IQR Outlier Repair (uploaded Final_Combined)"):
             df_up = pd.read_excel(up2, engine="openpyxl")
             df_rep2 = mask_extreme_outliers_df(df_up, k=3.0)
@@ -1109,11 +1111,14 @@ with tabs[6]:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-# ------------------------ 9) GUIDE ------------------------
-with tabs[7]:
+# ------------------------ 9) GUIDE (correct tab index & filename) ------------------------
+with tabs[8]:
     st.header("📘 Download Data Cleaning Guide")
     st.markdown("Download the official data cleaning and validation guide.")
-    guide_filename_on_disk = "Validation Rules for Parameters.pdf.pdf"
+
+    # Use a single, consistent filename (place this PDF next to the app)
+    guide_filename_on_disk = "Validation_Rules_for_Parameters.pdf"
+
     if os.path.exists(guide_filename_on_disk):
         with open(guide_filename_on_disk, "rb") as f:
             st.download_button(
@@ -1123,4 +1128,4 @@ with tabs[7]:
                 mime="application/pdf"
             )
     else:
-        st.info("Place 'Validation Rules for Parameters.pdf' next to the app to enable this download.")
+        st.info("Place 'Validation_Rules_for_Parameters.pdf' next to the app to enable this download.")
