@@ -974,7 +974,7 @@ with tabs[5]:
 # ------------------------ 7) RUN ALL + FINAL COMBINED/REPAIRED ------------------------
 with tabs[6]:
     st.header("🚀 Run All (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)")
-    st.caption("Final_Combined ساخته می‌شود و Final_Repaired فقط با حذف پرت‌های شدید (3×IQR) از Final_Combined تولید می‌شود.")
+    st.caption("Final_Combined is generated, and Final_Repaired is produced only by removing extreme outliers (3×IQR) from Final_Combined.")
 
     if not isinstance(st.session_state.df_original, pd.DataFrame):
         st.info("Upload a file in the first tab.")
