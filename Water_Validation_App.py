@@ -114,6 +114,54 @@ def is_truthy_flag(val) -> bool:
     s = str(val).strip().lower()
     return s in {"y","yes","true","1","flag","flagged","invalid","bad","exclude","remove"}
 
+# ---------- Outlier Cleaner (IQR) helpers ----------
+NON_QUALITY_KEYWORDS = [
+    "Data", "Unnamed", "Sample", "Site", "Weather",
+    "Notes", "Changes", "All_", "Present"
+]
+
+def detect_quality_numeric_columns(df: pd.DataFrame, non_quality_keywords=NON_QUALITY_KEYWORDS):
+    cols = []
+    for c in df.columns:
+        name = str(c)
+        if not any(kw in name for kw in non_quality_keywords) and pd.api.types.is_numeric_dtype(df[c]):
+            cols.append(c)
+    return cols
+
+def compute_iqr_bounds(series: pd.Series, k: float = 1.5):
+    q1 = series.quantile(0.25)
+    q3 = series.quantile(0.75)
+    iqr = q3 - q1
+    lower = q1 - k * iqr
+    upper = q3 + k * iqr
+    return q1, q3, lower, upper
+
+def iqr_clean(df: pd.DataFrame, cols: list, k: float = 1.5):
+    """
+    Outliers are set to NaN per column (rows/متادیتا دست‌نخورده).
+    Returns: cleaned_df, report_df
+    """
+    out = df.copy()
+    rows = []
+    for col in cols:
+        s = pd.to_numeric(out[col], errors="coerce").dropna()
+        if s.empty:
+            rows.append({"column": col, "Q1": np.nan, "Q3": np.nan,
+                         "lower": np.nan, "upper": np.nan,
+                         "num_outliers": 0, "num_nonnull": 0, "pct_outliers": 0.0})
+            continue
+        q1, q3, lower, upper = compute_iqr_bounds(s, k=k)
+        mask = (out[col] < lower) | (out[col] > upper)
+        n_out = int(mask.sum())
+        n_nonnull = int(out[col].notna().sum())
+        pct = round((n_out / n_nonnull * 100.0), 3) if n_nonnull else 0.0
+        out.loc[mask, col] = np.nan
+        rows.append({"column": col, "Q1": q1, "Q3": q3, "lower": lower, "upper": upper,
+                     "num_outliers": n_out, "num_nonnull": n_nonnull, "pct_outliers": pct})
+    report = pd.DataFrame(rows)
+    return out, report
+
+
 # -------------------- Key builder for merges --------------------
 def make_key(df: pd.DataFrame) -> pd.Series:
     cols = []
@@ -705,6 +753,7 @@ tabs = st.tabs([
     "4️⃣ ADVANCED Validation",
     "5️⃣ RIPARIAN Validation",
     "🚀 Run All & Exports",
+    "🧹 Outlier Cleaner (IQR)",   
     "📘Cleaning Guide",
 ])
 
@@ -937,8 +986,66 @@ with tabs[6]:
                     mime="application/zip",
                 )
 
-# ------------------------ 8) GUIDE ------------------------
+# ------------------------ 8) OUTLIER CLEANER (IQR) ------------------------
 with tabs[7]:
+    st.header("🧹 Outlier Cleaner (IQR)")
+    st.caption("Set per-column outliers to NaN using IQR bounds (does not drop rows; metadata stays intact).")
+
+    # منبع داده: اولویت با Final_Combined اگر ساخته شده؛ در غیر اینصورت بهترین خروجی‌های تمیز قبلی
+    src = first_available("df_final_combined", "df_adv_clean", "df_ecoli_clean", "df_general_clean", "df_original")
+    if src is None:
+        st.info("Upload a file in the first tab or run earlier steps.")
+    else:
+        st.write(f"**Source dataframe:** {len(src)} rows × {len(src.columns)} columns")
+        # کشف خودکار ستون‌های کیفی عددی
+        auto_cols = detect_quality_numeric_columns(src)
+
+        with st.expander("Select columns & options", expanded=True):
+            incl = st.multiselect(
+                "Water-quality numeric columns to clean (IQR):",
+                options=auto_cols, default=auto_cols,
+                help="Only these columns will be processed; other columns remain untouched."
+            )
+            k = st.slider("IQR Multiplier (k)", min_value=1.0, max_value=3.0, value=1.5, step=0.1,
+                          help="Bounds = [Q1 - k×IQR, Q3 + k×IQR]")
+
+        if st.button("Run IQR Clean"):
+            if not incl:
+                st.warning("Please select at least one numeric column.")
+            else:
+                cleaned, report = iqr_clean(src, incl, k=k)
+
+                base = st.session_state.input_basename or "input.xlsx"
+                p_clean = path_with_suffix(base, f"IQR_NoOutliers_k{str(k).replace('.','_')}")
+                p_report = os.path.join(tmp_dir(), f"IQR_Report_k{str(k).replace('.','_')}.csv")
+
+                save_excel(cleaned, p_clean)
+                report.to_csv(p_report, index=False)
+
+                st.success("✅ IQR cleaning done. Downloads below:")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.download_button(
+                        "📥 Download IQR-cleaned Excel",
+                        data=open(p_clean, "rb").read(),
+                        file_name=os.path.basename(p_clean)
+                    )
+                with c2:
+                    st.download_button(
+                        "📊 Download IQR bounds/report (CSV)",
+                        data=open(p_report, "rb").read(),
+                        file_name=os.path.basename(p_report),
+                        mime="text/csv"
+                    )
+
+                with st.expander("Preview (first 20 rows)"):
+                    st.dataframe(cleaned.head(20))
+                with st.expander("Report preview"):
+                    st.dataframe(report)
+
+
+# ------------------------ 8) GUIDE ------------------------
+with tabs[8]:
     st.header("📘 Download Data Cleaning Guide")
     st.markdown("Download the official data cleaning and validation guide.")
 
