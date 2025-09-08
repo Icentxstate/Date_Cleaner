@@ -829,7 +829,8 @@ tabs = st.tabs([
     "4️⃣ ADVANCED Validation",
     "5️⃣ RIPARIAN Validation",
     "🚀 Run All & Exports",
-    "📘 Cleaning Guide",
+    "🧹 Outlier Removal",
+    "📘Cleaning Guide",
 ])
 
 # ------------------------ 1) UPLOAD ------------------------
