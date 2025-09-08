@@ -1068,8 +1068,8 @@ with tabs[6]:
                 )
 
     st.divider()
-    st.subheader("🔧 فقط Outlier Repair از Final_Combined (بدون اجرای کل مراحل)")
-    st.caption("اگر قبلاً Run All را زده‌ای (یا فایل Final_Combined آماده داری)، می‌توانی صرفاً حذف پرت‌های شدید (۳×IQR) را اجرا کنی.")
+    st.subheader("🔧 Outlier Repair Only from Final_Combined (without running all steps)")
+    st.caption("If you have already run “Run All” (or have a Final_Combined file ready), you can simply perform extreme outlier removal (3×IQR).")
 
     # اگر در همین سشن Final_Combined ساخته شده باشد:
     df_fc = st.session_state.get("df_final_combined", None)
