@@ -830,7 +830,6 @@ tabs = st.tabs([
     "4️⃣ ADVANCED Validation",
     "5️⃣ RIPARIAN Validation",
     "🚀 Run All & Exports",
-    "🧹 Outlier Removal",
     "📘Cleaning Guide",
 ])
 
@@ -1074,45 +1073,10 @@ with tabs[6]:
                     mime="application/zip",
                 )
 
-# ------------------------ 8) OUTLIER REMOVAL (own tab) ------------------------
-with tabs[7]:
-    st.header("🧹 Outlier Removal")
-    st.caption("Apply 3×IQR cell-wise outlier masking to an existing Final_Combined dataset.")
 
-    df_fc = st.session_state.get("df_final_combined", None)
-    if df_fc is not None:
-        st.subheader("Use Final_Combined produced in this session")
-        if st.button("🧹 Apply 3×IQR Outlier Repair on current Final_Combined and Download"):
-            df_rep2 = mask_extreme_outliers_df(df_fc, k=3.0)
-            bio = io.BytesIO()
-            with pd.ExcelWriter(bio, engine="openpyxl") as w:
-                df_rep2.to_excel(w, index=False, sheet_name="Repaired")
-            bio.seek(0)
-            st.download_button(
-                "📥 Download Final_Repaired.xlsx",
-                data=bio.getvalue(),
-                file_name="Final_Repaired.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-    else:
-        st.subheader("Upload a Final_Combined.xlsx")
-        up2 = st.file_uploader("Upload Final_Combined.xlsx", type=["xlsx"], key="fc_only")
-        if up2 and st.button("🧹 Apply 3×IQR Outlier Repair (uploaded Final_Combined)"):
-            df_up = pd.read_excel(up2, engine="openpyxl")
-            df_rep2 = mask_extreme_outliers_df(df_up, k=3.0)
-            bio = io.BytesIO()
-            with pd.ExcelWriter(bio, engine="openpyxl") as w:
-                df_rep2.to_excel(w, index=False, sheet_name="Repaired")
-            bio.seek(0)
-            st.download_button(
-                "📥 Download Final_Repaired.xlsx",
-                data=bio.getvalue(),
-                file_name="Final_Repaired.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
 
 # ------------------------ 9) GUIDE (correct tab index & filename) ------------------------
-with tabs[8]:
+with tabs[7]:
     st.header("📘 Download Data Cleaning Guide")
     st.markdown("Download the official data cleaning and validation guide.")
 
