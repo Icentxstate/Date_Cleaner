@@ -2,7 +2,7 @@
 # Streamlit app for Water Quality Data Validation (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)
 # Includes: duplicates removal, flagged-row removal, midday warning, conductivity aliases,
 # calibration time (≤24h), two-step E. coli rounding, stricter unit checks, riparian completeness,
-# Final_Combined.xlsx (notes merged) + Final_Repaired.xlsx (values actually fixed).
+# Final_Combined.xlsx (notes merged).   <-- Final_Repaired (3×IQR) REMOVED
 
 import streamlit as st
 import pandas as pd
@@ -114,24 +114,6 @@ def is_truthy_flag(val) -> bool:
     s = str(val).strip().lower()
     return s in {"y","yes","true","1","flag","flagged","invalid","bad","exclude","remove"}
 
-def mask_extreme_outliers_df(df_in: pd.DataFrame, k: float = 3.0) -> pd.DataFrame:
-    """
-    سلول‌های پرت شدید را با آستانه 3×IQR به صورت cell-wise NaN می‌کند.
-    فقط ستون‌های عددی تحت تأثیر قرار می‌گیرند؛ سایر ستون‌ها دست‌نخورده می‌مانند.
-    """
-    df = df_in.copy()
-    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    for c in numeric_cols:
-        x = pd.to_numeric(df[c], errors="coerce")
-        q1, q3 = x.quantile(0.25), x.quantile(0.75)
-        iqr = q3 - q1
-        if pd.isna(iqr) or iqr == 0:
-            df[c] = x
-            continue
-        low, high = q1 - k*iqr, q3 + k*iqr
-        df[c] = x.where((x >= low) & (x <= high), "")
-    return df
-
 # -------------------- Key builder for merges --------------------
 def make_key(df: pd.DataFrame) -> pd.Series:
     cols = []
@@ -210,115 +192,8 @@ def build_final_combined(base_df: pd.DataFrame,
     final.drop(columns=["_key_"], inplace=True, errors="ignore")
     return final
 
-# -------------------- Repaired dataset (apply safe fixes to values) --------------------
-def build_repaired_dataset(base_df: pd.DataFrame,
-                           g_annot: Optional[pd.DataFrame],
-                           c_annot: Optional[pd.DataFrame],
-                           e_annot: Optional[pd.DataFrame],
-                           a_annot: Optional[pd.DataFrame],
-                           r_annot: Optional[pd.DataFrame]) -> pd.DataFrame:
-    """Apply deterministic, safe fixes onto the data itself and log them."""
-    rep = base_df.copy()
-    rep["_key_"] = make_key(rep)
-    rep["Repaired_ChangeLog"] = ""
-
-    def map_from(src_df, src_col):
-        if src_df is None or src_col not in src_df.columns:
-            return None
-        tmp = src_df.copy()
-        tmp["_key_"] = make_key(src_df)
-        s = tmp.set_index("_key_")[src_col]
-        return s.reindex(rep["_key_"]).values  # aligned to rep rows
-
-    def apply_replace(dst_col, new_vals, fmt=None, note=None):
-        if new_vals is None or dst_col not in rep.columns:
-            return
-        if fmt:
-            try:
-                new_vals = np.array([fmt(v) for v in new_vals], dtype=object)
-            except Exception:
-                pass
-        mask = pd.notna(new_vals)
-        if mask.any():
-            rep.loc[mask, dst_col] = new_vals[mask]
-            if note:
-                rep.loc[mask, "Repaired_ChangeLog"] += note
-
-    # From CORE: pH Rounded, Water Temp Rounded, DO1/DO2 Rounded, Salinity Formatted
-    apply_replace("pH (standard units)",      map_from(c_annot, "pH Rounded"),
-                  note="pH→rounded(0.1); ")
-    apply_replace("Water Temperature (° C)",  map_from(c_annot, "Water Temp Rounded"),
-                  note="WaterTemp→rounded(0.1); ")
-    do1 = map_from(c_annot, "DO1 Rounded")
-    do2 = map_from(c_annot, "DO2 Rounded")
-    if do1 is not None and do2 is not None and "Dissolved Oxygen (mg/L) Average" in rep.columns:
-        mean_do = []
-        for a, b in zip(do1, do2):
-            try:
-                if pd.notna(a) and pd.notna(b):
-                    mean_do.append(round((float(a)+float(b))/2, 1))
-                else:
-                    mean_do.append(np.nan)
-            except:
-                mean_do.append(np.nan)
-        apply_replace("Dissolved Oxygen (mg/L) Average", np.array(mean_do, dtype=object),
-                      note="DOavg→mean(DO1,DO2) rounded(0.1); ")
-    apply_replace("Salinity (ppt)",           map_from(c_annot, "Salinity Formatted"),
-                  note="Salinity→standardized display; ")
-
-    # From ECOLI: E. Coli Rounded (int→2SF)
-    apply_replace("E. Coli Average",         map_from(e_annot, "E. Coli Rounded (int→2SF)"),
-                  note="E.coli→int→2SF; ")
-
-    # From ADVANCED: Discharge Recorded (already formatted there)
-    apply_replace("Discharge Recorded",      map_from(a_annot, "Discharge Recorded"),
-                  note="Discharge→formatted; ")
-
-    # Recompute CFU if inputs present
-    def recompute_cfu(prefix):
-        cols = [f"{prefix}: Colonies Counted",
-                f"{prefix}: Dilution Factor (Manual)",
-                f"{prefix}: Sample Size (mL)",
-                f"{prefix}: Colony Forming Units per 100mL"]
-        if not all(c in rep.columns for c in cols):
-            return
-        try:
-            count = pd.to_numeric(rep[cols[0]], errors="coerce")
-            dil   = pd.to_numeric(rep[cols[1]], errors="coerce")
-            vol   = pd.to_numeric(rep[cols[2]], errors="coerce")
-            calc  = (count * dil * 100) / vol
-            mask  = pd.notna(calc)
-            rep.loc[mask, cols[3]] = calc[mask].round(0)
-            rep.loc[mask, "Repaired_ChangeLog"] += f"{prefix} CFU→recomputed; "
-        except Exception:
-            pass
-    for px in ["Sample 1", "Sample 2"]:
-        recompute_cfu(px)
-
-    # Conductivity header alias: ?S/cm → µS/cm
-    if "Conductivity (?S/cm)" in rep.columns and "Conductivity (µS/cm)" not in rep.columns:
-        rep.rename(columns={"Conductivity (?S/cm)": "Conductivity (µS/cm)"}, inplace=True)
-        rep["Repaired_ChangeLog"] += "Conductivity header→µS/cm; "
-
-    # Unit normalization: nitrate/phosphate ppm→mg/L (no numeric change for freshwater)
-    unit_col = "ResultMeasure/MeasureUnitCode"
-    param_col = "CharacteristicName"
-    if unit_col in rep.columns and param_col in rep.columns:
-        u = rep[unit_col].astype(str).str.lower()
-        p = rep[param_col].astype(str).str.lower()
-        mask_ppm = u.eq("ppm") & (p.str.contains("phosphate") | p.str.contains("nitrate"))
-        if mask_ppm.any():
-            rep.loc[mask_ppm, unit_col] = "mg/L"
-            rep.loc[mask_ppm, "Repaired_ChangeLog"] += "Unit ppm→mg/L; "
-
-    # Drop duplicates on identity keys
-    key_cols = [c for c in ["Group or Affiliation","Site ID: Site Name","Sample Date","Sample Time Final Format"] if c in rep.columns]
-    if len(key_cols) >= 2:
-        rep = rep.drop_duplicates(subset=key_cols, keep="first")
-        rep["Repaired_ChangeLog"] += "Duplicates dropped; "
-
-    rep.drop(columns=["_key_"], inplace=True, errors="ignore")
-    return rep
+# -------------------- Repaired dataset (REMOVED) --------------------
+#  (به درخواست شما: هیچ حذف/ماسک outlier انجام نمی‌شود)
 
 # -------------------- GENERAL --------------------
 def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -399,7 +274,7 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             df.at[idx, "ValidationColorKey"] += "range;"
             row_delete_indices.add(idx)
 
-    # Standard ranges & texts
+    # Standard ranges & texts (these remain validation rules; they still clear invalid values)
     standard_ranges = {}
     note_texts = {}
     if cond_col:
@@ -428,9 +303,9 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             mask = (df[col] < mn) | (df[col] > mx)
             df.loc[mask, "ValidationNotes"] += note_texts[col]
             df.loc[mask, "ValidationColorKey"] += "range;"
-            df.loc[mask, col] = np.nan
+            df.loc[mask, col] = np.nan  # اعتبارسنجی محدوده (حذف outlier نیست؛ قانون کیفیت داده است)
 
-    # Contextual outliers per site
+    # Contextual outliers per site (ONLY TAG, DO NOT CLEAR VALUES)
     if "Site ID: Site Name" in df.columns:
         for col in standard_ranges:
             if col in df.columns:
@@ -442,7 +317,7 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                 idxs = mask[mask].index
                 df.loc[idxs, "ValidationNotes"] += f"{col} contextual outlier (>3σ); "
                 df.loc[idxs, "ValidationColorKey"] += "contextual_outlier;"
-                df.loc[idxs, col] = np.nan
+                # ⚠️ مقدار را دست‌نخورده می‌گذاریم (هیچ پاک‌سازی سلولی انجام نمی‌شود)
 
     # Expired reagents
     if "Chemical Reagents Used" in df.columns:
@@ -971,10 +846,10 @@ with tabs[5]:
                 st.download_button("📥 Download annotated_RIPARIAN.xlsx", data=open(p_annot, "rb").read(),
                                    file_name="annotated_RIPARIAN.xlsx")
 
-# ------------------------ 7) RUN ALL + FINAL COMBINED/REPAIRED ------------------------
+# ------------------------ 7) RUN ALL + FINAL COMBINED ------------------------
 with tabs[6]:
     st.header("🚀 Run All (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)")
-    st.caption("Final_Combined is generated, and Final_Repaired is produced only by removing extreme outliers (3×IQR) from Final_Combined.")
+    st.caption("Final_Combined is generated. (منطق حذفِ دادهٔ پرت 3×IQR حذف شده است.)")
 
     if not isinstance(st.session_state.df_original, pd.DataFrame):
         st.info("Upload a file in the first tab.")
@@ -1032,17 +907,12 @@ with tabs[6]:
             p_final = path_with_suffix(base, "Final_Combined")
             save_excel(df_final, p_final)
 
-            # Keep in session for the standalone Outlier Repair tab
+            # Keep in session
             st.session_state.df_final_combined = df_final.copy()
             st.session_state.p_final_combined = p_final
 
-            # 7) Final_Repaired = cell-wise extreme outlier removal (3×IQR) from Final_Combined
-            df_repaired = mask_extreme_outliers_df(df_final, k=3.0)
-            p_repaired = path_with_suffix(base, "Final_Repaired")
-            save_excel(df_repaired, p_repaired)
-
-            st.success("✅ All steps completed. Final files are ready.")
-            c1, c2, c3 = st.columns(3)
+            st.success("✅ All steps completed. Final_Combined is ready.")
+            c1, c2 = st.columns(2)
             with c1:
                 st.download_button(
                     "📥 Download Final_Combined.xlsx",
@@ -1050,39 +920,29 @@ with tabs[6]:
                     file_name="Final_Combined.xlsx"
                 )
             with c2:
-                st.download_button(
-                    "🛠️ Download Final_Repaired.xlsx (3×IQR, cell-wise)",
-                    data=open(p_repaired, "rb").read(),
-                    file_name="Final_Repaired.xlsx"
-                )
-            with c3:
-                # ZIP all outputs
+                # ZIP all step outputs + Final_Combined (no Final_Repaired anymore)
                 mem_zip = io.BytesIO()
                 with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
                     for path in [
                         p_g_clean, p_g_annot, p_c_clean, p_c_annot, p_e_clean, p_e_annot,
-                        p_a_clean, p_a_annot, p_r_clean, p_r_annot, p_final, p_repaired
+                        p_a_clean, p_a_annot, p_r_clean, p_r_annot, p_final
                     ]:
                         if os.path.exists(path):
                             zf.write(path, arcname=os.path.basename(path))
                 mem_zip.seek(0)
                 st.download_button(
-                    "📦 Download ALL outputs (ZIP incl. Final_Combined & Final_Repaired)",
+                    "📦 Download ALL outputs (ZIP incl. Final_Combined)",
                     data=mem_zip.getvalue(),
                     file_name=f"Validation_Outputs_{datetime.now().strftime('%Y%m%d_%H%M')}.zip",
                     mime="application/zip",
                 )
 
-
-
-# ------------------------ 9) GUIDE (correct tab index & filename) ------------------------
+# ------------------------ 8) GUIDE ------------------------
 with tabs[7]:
     st.header("📘 Download Data Cleaning Guide")
     st.markdown("Download the official data cleaning and validation guide.")
 
-    # Use a single, consistent filename (place this PDF next to the app)
     guide_filename_on_disk = "Validation_Rules_for_Parameters.pdf"
-
     if os.path.exists(guide_filename_on_disk):
         with open(guide_filename_on_disk, "rb") as f:
             st.download_button(
