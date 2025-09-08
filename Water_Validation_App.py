@@ -129,7 +129,7 @@ def mask_extreme_outliers_df(df_in: pd.DataFrame, k: float = 3.0) -> pd.DataFram
             df[c] = x
             continue
         low, high = q1 - k*iqr, q3 + k*iqr
-        df[c] = x.where((x >= low) & (x <= high), np.nan)
+        df[c] = x.where((x >= low) & (x <= high), "")
     return df
 
 # -------------------- Key builder for merges --------------------
