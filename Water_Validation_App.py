@@ -4,7 +4,7 @@
 # calibration time (≤24h), two-step E. coli rounding, stricter unit checks, riparian completeness,
 # Final_Combined.xlsx (notes merged).   <-- Final_Repaired (3×IQR) REMOVED
 # Plus: Transparency Tube 0–1.2m (equipment), Secchi TX QA window 0.2–5.0m, Secchi > Depth removal,
-# Conductivity auto-format per guide.
+# Conductivity auto-format per guide, and 🚀 "داده‌های تمیز.xlsx" (Cleaned_AllSteps)
 
 import streamlit as st
 import pandas as pd
@@ -49,6 +49,7 @@ def init_state():
         "df_adv_clean","df_adv_annot",
         "df_rip_clean","df_rip_annot",
         "df_final_combined","p_final_combined",
+        "df_clean_all","p_clean_all",
     ]:
         st.session_state.setdefault(k, None)
 init_state()
@@ -304,7 +305,7 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df.loc[mask, "ValidationColorKey"] += "watershed_or_events;"
         row_delete_indices.update(df[mask].index.tolist())
 
-    # Site event count (>=10 per site) — coarse check
+    # Site event count (>=10 per site)
     if "Site ID: Site Name" in df.columns and "Sample Date" in df.columns:
         df["Sample Date"] = pd.to_datetime(df["Sample Date"], errors="coerce")
         event_counts = df.groupby("Site ID: Site Name")["Sample Date"].nunique()
@@ -968,10 +969,10 @@ with tabs[5]:
                 st.download_button("📥 Download annotated_RIPARIAN.xlsx", data=open(p_annot, "rb").read(),
                                    file_name="annotated_RIPARIAN.xlsx")
 
-# ------------------------ 7) RUN ALL + FINAL COMBINED ------------------------
+# ------------------------ 7) RUN ALL + FINAL COMBINED + CLEANED ALL ------------------------
 with tabs[6]:
     st.header("🚀 Run All (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)")
-    st.caption("Final_Combined is generated. ")
+    st.caption("Final_Combined + داده‌های تمیز ساخته می‌شود.")
 
     if not isinstance(st.session_state.df_original, pd.DataFrame):
         st.info("Upload a file in the first tab.")
@@ -1028,13 +1029,25 @@ with tabs[6]:
             )
             p_final = path_with_suffix(base, "Final_Combined")
             save_excel(df_final, p_final)
-
-            # Keep in session
             st.session_state.df_final_combined = df_final.copy()
             st.session_state.p_final_combined = p_final
 
-            st.success("✅ All steps completed. Final_Combined is ready.")
-            c1, c2 = st.columns(2)
+            # 7) Cleaned_AllSteps (داده‌های تمیز) — deepest cleaned stage available
+            df_clean_all = (
+                r_clean if not r_clean.empty else
+                (a_clean if not a_clean.empty else
+                 (e_clean if not e_clean.empty else
+                  (c_clean if not c_clean.empty else g_clean)))
+            )
+            p_clean_all = path_with_suffix(base, "Cleaned_AllSteps")
+            save_excel(df_clean_all, p_clean_all)
+            st.session_state.df_clean_all = df_clean_all.copy()
+            st.session_state.p_clean_all = p_clean_all
+
+            st.success("✅ All steps completed. Final_Combined + داده‌های تمیز آماده است.")
+
+            # Downloads: Final_Combined, Cleaned_AllSteps (Persian name), ZIP
+            c1, c2, c3 = st.columns(3)
             with c1:
                 st.download_button(
                     "📥 Download Final_Combined.xlsx",
@@ -1042,18 +1055,24 @@ with tabs[6]:
                     file_name="Final_Combined.xlsx"
                 )
             with c2:
-                # ZIP all step outputs + Final_Combined (no Final_Repaired anymore)
+                st.download_button(
+                    "📥 دانلود «داده‌های تمیز.xlsx»",
+                    data=open(p_clean_all, "rb").read(),
+                    file_name="داده‌های تمیز.xlsx"
+                )
+            with c3:
+                # ZIP all step outputs + Final_Combined + Cleaned_AllSteps
                 mem_zip = io.BytesIO()
                 with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
                     for path in [
                         p_g_clean, p_g_annot, p_c_clean, p_c_annot, p_e_clean, p_e_annot,
-                        p_a_clean, p_a_annot, p_r_clean, p_r_annot, p_final
+                        p_a_clean, p_a_annot, p_r_clean, p_r_annot, p_final, p_clean_all
                     ]:
                         if os.path.exists(path):
                             zf.write(path, arcname=os.path.basename(path))
                 mem_zip.seek(0)
                 st.download_button(
-                    "📦 Download ALL outputs (ZIP incl. Final_Combined)",
+                    "📦 Download ALL outputs (ZIP incl. Final_Combined & Cleaned_AllSteps)",
                     data=mem_zip.getvalue(),
                     file_name=f"Validation_Outputs_{datetime.now().strftime('%Y%m%d_%H%M')}.zip",
                     mime="application/zip",
