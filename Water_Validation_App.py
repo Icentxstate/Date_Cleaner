@@ -3,6 +3,8 @@
 # Includes: duplicates removal, flagged-row removal, midday warning, conductivity aliases,
 # calibration time (≤24h), two-step E. coli rounding, stricter unit checks, riparian completeness,
 # Final_Combined.xlsx (notes merged).   <-- Final_Repaired (3×IQR) REMOVED
+# Plus: Transparency Tube 0–1.2m (equipment), Secchi TX QA window 0.2–5.0m, Secchi > Depth removal,
+# Conductivity auto-format per guide.
 
 import streamlit as st
 import pandas as pd
@@ -61,6 +63,34 @@ def first_available(*keys, require_nonempty: bool = False):
 
 def get_cond_col(df: pd.DataFrame) -> Optional[str]:
     return next((c for c in COND_CANDIDATES if c in df.columns), None)
+
+def get_tt_col(df: pd.DataFrame) -> Optional[str]:
+    """Find Transparency Tube column."""
+    if "Transparency Tube (m)" in df.columns:
+        return "Transparency Tube (m)"
+    for c in df.columns:
+        cl = str(c).lower()
+        if "transparency" in cl and "tube" in cl:
+            return c
+    return None
+
+def get_secchi_col(df: pd.DataFrame) -> Optional[str]:
+    """Find Secchi column by common names."""
+    candidates = [
+        "Secchi Disk Transparency - Average",
+        "Secchi Transparency - Average",
+        "Secchi Depth (m)",
+        "Secchi (m)",
+        "Secchi"
+    ]
+    for c in candidates:
+        if c in df.columns:
+            return c
+    for c in df.columns:
+        cl = str(c).lower()
+        if "secchi" in cl and ("transpar" in cl or "depth" in cl):
+            return c
+    return None
 
 def parse_hour_from_time_string(t) -> Optional[int]:
     try:
@@ -240,9 +270,6 @@ def build_final_combined(base_df: pd.DataFrame,
     final.drop(columns=["_key_"], inplace=True, errors="ignore")
     return final
 
-# -------------------- Repaired dataset (REMOVED) --------------------
-#  (به درخواست شما: هیچ حذف/ماسک outlier انجام نمی‌شود)
-
 # -------------------- GENERAL --------------------
 def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     df = df0.copy()
@@ -268,7 +295,7 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df.loc[fl_mask, "ValidationNotes"] += "Row flagged by data flag column; "
         row_delete_indices.update(df[fl_mask].index.tolist())
 
-    # Watershed site count
+    # Watershed site count (>=3)
     if "Group or Affiliation" in df.columns and "Site ID: Site Name" in df.columns:
         site_counts = df.groupby("Group or Affiliation")["Site ID: Site Name"].nunique()
         invalid_ws = site_counts[site_counts < 3].index
@@ -277,7 +304,7 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df.loc[mask, "ValidationColorKey"] += "watershed_or_events;"
         row_delete_indices.update(df[mask].index.tolist())
 
-    # Site event count
+    # Site event count (>=10 per site) — coarse check
     if "Site ID: Site Name" in df.columns and "Sample Date" in df.columns:
         df["Sample Date"] = pd.to_datetime(df["Sample Date"], errors="coerce")
         event_counts = df.groupby("Site ID: Site Name")["Sample Date"].nunique()
@@ -322,12 +349,34 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             df.at[idx, "ValidationColorKey"] += "range;"
             row_delete_indices.add(idx)
 
-    # Standard ranges & texts (these remain validation rules; they still clear invalid values)
+    # Standard ranges & texts
     standard_ranges = {}
     note_texts = {}
     if cond_col:
         standard_ranges[cond_col] = (50, 1500)
         note_texts[cond_col] = "Conductivity out of range [50–1500]; "
+
+    # --- Transparency Tube: equipment range 0–1.2 m ---
+    tt_col = get_tt_col(df)
+    if tt_col and tt_col in df.columns:
+        if "(m" not in str(tt_col).lower():
+            df["ValidationNotes"] += f"{tt_col} unit not labeled as meters (m); assumed meters; "
+            df["ValidationColorKey"] += "unit;"
+        df[tt_col] = pd.to_numeric(df[tt_col], errors="coerce")
+        standard_ranges[tt_col] = (0.0, 1.2)
+        note_texts[tt_col] = "Transparency Tube out of equipment range [0–1.2 m]; "
+
+    # --- Secchi Disk: Texas-practical QA window 0.2–5.0 m ---
+    secchi_col = get_secchi_col(df)
+    if secchi_col and secchi_col in df.columns:
+        if "(m" not in str(secchi_col).lower():
+            df["ValidationNotes"] += f"{secchi_col} unit not labeled as meters (m); assumed meters; "
+            df["ValidationColorKey"] += "unit;"
+        df[secchi_col] = pd.to_numeric(df[secchi_col], errors="coerce")
+        standard_ranges[secchi_col] = (0.2, 5.0)
+        note_texts[secchi_col] = "Secchi out of Texas-practical QA window [0.2–5.0 m]; "
+
+    # Other ranges
     extra = {
         "pH (standard units)": ((6.5, 9.0), "pH out of range [6.5–9.0]; "),
         "Dissolved Oxygen (mg/L) Average": ((5.0, 14.0), "DO out of range [5.0–14.0]; "),
@@ -336,7 +385,6 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         "Air Temperature (° C)": ((-10, 50), "Air Temp out of range [-10–50]; "),
         "Turbidity": ((0, 1000), "Turbidity out of range [0–1000]; "),
         "E. Coli Average": ((1, 235), "E. Coli out of range [1–235]; "),
-        "Secchi Disk Transparency - Average": ((0.2, 5), "Secchi out of range [0.2–5]; "),
         "Nitrate-Nitrogen VALUE (ppm or mg/L)": ((0, 10), "Nitrate out of range [0–10]; "),
         "Orthophosphate": ((0, 0.5), "Orthophosphate out of range [0–0.5]; "),
         "DO (%)": ((80, 120), "DO % out of range [80–120]; "),
@@ -346,26 +394,27 @@ def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         standard_ranges[k] = rng
         note_texts[k] = txt
 
+    # Apply ranges → set out-of-range to NaN + note
     for col, (mn, mx) in standard_ranges.items():
         if col in df.columns:
-            mask = (df[col] < mn) | (df[col] > mx)
-            df.loc[mask, "ValidationNotes"] += note_texts[col]
-            df.loc[mask, "ValidationColorKey"] += "range;"
-            df.loc[mask, col] = np.nan  # اعتبارسنجی محدوده (حذف outlier نیست؛ قانون کیفیت داده است)
+            df[col] = pd.to_numeric(df[col], errors="ignore")
+            m = (pd.to_numeric(df[col], errors="coerce") < mn) | (pd.to_numeric(df[col], errors="coerce") > mx)
+            df.loc[m, "ValidationNotes"] += note_texts[col]
+            df.loc[m, "ValidationColorKey"] += "range;"
+            df.loc[m, col] = np.nan
 
-    # Contextual outliers per site (ONLY TAG, DO NOT CLEAR VALUES)
+    # Contextual outliers per site (ONLY TAG)
     if "Site ID: Site Name" in df.columns:
         for col in standard_ranges:
             if col in df.columns:
-                sub = df[[col, "Site ID: Site Name"]].copy()
-                means = sub.groupby("Site ID: Site Name")[col].transform("mean")
-                stds = sub.groupby("Site ID: Site Name")[col].transform("std")
-                z = (sub[col] - means) / stds
+                vals = pd.to_numeric(df[col], errors="coerce")
+                means = vals.groupby(df["Site ID: Site Name"]).transform("mean")
+                stds  = vals.groupby(df["Site ID: Site Name"]).transform("std")
+                z = (vals - means) / stds
                 mask = (z.abs() > 3)
                 idxs = mask[mask].index
                 df.loc[idxs, "ValidationNotes"] += f"{col} contextual outlier (>3σ); "
                 df.loc[idxs, "ValidationColorKey"] += "contextual_outlier;"
-                # ⚠️ مقدار را دست‌نخورده می‌گذاریم (هیچ پاک‌سازی سلولی انجام نمی‌شود)
 
     # Expired reagents
     if "Chemical Reagents Used" in df.columns:
@@ -405,6 +454,18 @@ def run_core(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     cond_col = get_cond_col(df)
 
+    # --- Unit label sanity checks (notes only) ---
+    def note_if_missing_unit(col_name, unit_hint):
+        if col_name in df.columns and unit_hint.lower() not in str(col_name).lower():
+            df["CORE_Notes"] += f"{col_name} not labeled as {unit_hint}; "
+
+    note_if_missing_unit("Air Temperature (° C)", "°c")
+    note_if_missing_unit("Water Temperature (° C)", "°c")
+    note_if_missing_unit("Total Depth (meters)", "meters")
+    note_if_missing_unit("Sample Depth (meters)", "meters")
+    note_if_missing_unit("Roundtrip Distance Traveled", "mi")
+    note_if_missing_unit("Time Spent Sampling/Traveling", "min")
+
     # Sample depth rule
     if "Sample Depth (meters)" in df.columns and "Total Depth (meters)" in df.columns:
         for idx, row in df.iterrows():
@@ -436,17 +497,45 @@ def run_core(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df["DO2 Rounded"] = pd.to_numeric(df[do2], errors="coerce").round(1)
         df["CORE_ChangeNotes"] += "Rounded DO to 0.1; "
 
-    # Secchi rules
-    secchi = "Secchi Disk Transparency - Average"
+    # --- Secchi: 2 sig figs + remove if > depth ---
+    secchi = get_secchi_col(df) or "Secchi Disk Transparency - Average"
     if secchi in df.columns and "Total Depth (meters)" in df.columns:
-        def sig2_ok(v):
+        def to_two_sigfigs(x):
             try:
-                s = str(v).replace(".", "").lstrip("0")
-                return len(s) <= 2
+                v = float(x)
+                if v == 0 or np.isnan(v): return v
+                k = int(np.floor(np.log10(abs(v))))
+                return round(v, -k + 1)
             except:
-                return True
-        df.loc[~df[secchi].apply(sig2_ok), "CORE_Notes"] += "Secchi not 2 significant figures; "
-        df.loc[df[secchi] > df["Total Depth (meters)"], "CORE_Notes"] += "Secchi > Depth; "
+                return x
+
+        before = df[secchi].copy()
+        df[secchi] = pd.to_numeric(df[secchi], errors="coerce").apply(to_two_sigfigs)
+        changed = before != df[secchi]
+        if changed.any():
+            df.loc[changed, "CORE_ChangeNotes"] += "Secchi rounded to 2 significant figures; "
+
+        mask_gt = pd.to_numeric(df[secchi], errors="coerce") > pd.to_numeric(df["Total Depth (meters)"], errors="coerce")
+        if mask_gt.any():
+            df.loc[mask_gt, "CORE_Notes"] += "Secchi > Depth; "
+            df.loc[mask_gt, secchi] = np.nan
+
+    # --- Conductivity auto-format per guide ---
+    if cond_col:
+        def cond_auto_format(val):
+            try:
+                v = float(val)
+                if v > 100:
+                    return float(int(round(v / 10.0)) * 10)   # nearest 10
+                else:
+                    return float(int(round(v)))               # integer
+            except:
+                return val
+        before = df[cond_col].copy()
+        df[cond_col] = df[cond_col].apply(cond_auto_format)
+        changed = before != df[cond_col]
+        if changed.any():
+            df.loc[changed, "CORE_ChangeNotes"] += "Conductivity formatted per guide; "
 
     # Calibration ±20% of standard (post-test)
     if "Post-Test Calibration Conductivity" in df.columns and "Standard Value" in df.columns:
@@ -463,12 +552,10 @@ def run_core(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             samp_dt = try_parse_datetime(row.get("Sample Date"), row.get("Sample Time Final Format"))
             if samp_dt is None:
                 continue
-            # Pre
             for c in pre_time_cols:
                 pre_dt = try_parse_datetime(row.get(c)) or try_parse_datetime(row.get("Sample Date"), row.get(c))
                 if pre_dt is not None and abs((samp_dt - pre_dt).total_seconds()) > 24*3600:
                     df.at[idx, "CORE_Notes"] += f"Pre-calibration time >24h from sample ({c}); "
-            # Post
             for c in post_time_cols:
                 post_dt = try_parse_datetime(row.get(c)) or try_parse_datetime(row.get("Sample Date"), row.get(c))
                 if post_dt is not None and abs((post_dt - samp_dt).total_seconds()) > 24*3600:
@@ -482,20 +569,7 @@ def run_core(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df["Water Temp Rounded"] = pd.to_numeric(df["Water Temperature (° C)"], errors="coerce").round(1)
         df["CORE_ChangeNotes"] += "Rounded Water Temp to 0.1; "
 
-    # Conductivity formatting
-    if cond_col:
-        def cond_format_ok(val):
-            try:
-                val = float(val)
-                if val > 100:
-                    return len(str(int(round(val)))) <= 3
-                else:
-                    return float(val).is_integer()
-            except:
-                return True
-        df.loc[~df[cond_col].apply(cond_format_ok), "CORE_Notes"] += "Conductivity format error; "
-
-    # Salinity display
+    # Salinity display (<2.0 => "< 2.0", else 0.1)
     if "Salinity (ppt)" in df.columns:
         def fmt_sal(val):
             try:
@@ -525,7 +599,7 @@ def run_ecoli(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     all_zero_cols = [col for col in df.columns
                      if pd.api.types.is_numeric_dtype(df[col]) and (df[col].fillna(0) == 0).all()]
 
-    # Temperature check
+    # Temperature check 30–36°C
     col_temp = "Incubation temperature is 33° C +/- 3° C"
     if col_temp in df.columns and col_temp not in all_zero_cols:
         df[col_temp] = pd.to_numeric(df[col_temp], errors="coerce")
@@ -533,7 +607,7 @@ def run_ecoli(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df.loc[mask, "ECOLI_ValidationNotes"] += "Incubation temperature not in 30–36°C range; "
         df.loc[mask, col_temp] = np.nan
 
-    # Time check
+    # Time check 28–31 h
     col_time = "Incubation time is between 28-31 hours"
     if col_time in df.columns and col_time not in all_zero_cols:
         df[col_time] = pd.to_numeric(df[col_time], errors="coerce")
@@ -541,7 +615,7 @@ def run_ecoli(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df.loc[mask, "ECOLI_ValidationNotes"] += "Incubation time not in 28–31h range; "
         df.loc[mask, col_time] = np.nan
 
-    # Colony count check
+    # Colony count check <200
     for col in ["Sample 1: Colonies Counted", "Sample 2: Colonies Counted"]:
         if col in df.columns and col not in all_zero_cols:
             mask = df[col] > 200
@@ -554,7 +628,7 @@ def run_ecoli(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         bad_blank = df[col_blank].astype(str).str.lower().isin(["no", "false", "n"])
         df.loc[bad_blank, "ECOLI_ValidationNotes"] += "Colony growth detected in field blank; "
 
-    # E. Coli average
+    # E. Coli average: remove zeros + two-step rounding
     col_ecoli = "E. Coli Average"
     if col_ecoli in df.columns and col_ecoli not in all_zero_cols:
         df[col_ecoli] = pd.to_numeric(df[col_ecoli], errors="coerce")
@@ -562,7 +636,6 @@ def run_ecoli(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df.loc[mask, "ECOLI_ValidationNotes"] += "E. coli = 0; "
         df.loc[mask, col_ecoli] = np.nan
 
-        # Two-step rounding: nearest integer → 2 significant figures
         def round_to_2sf_after_int(n):
             if pd.isna(n):
                 return n
@@ -578,7 +651,7 @@ def run_ecoli(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df["E. Coli Rounded (int→2SF)"] = df[col_ecoli].apply(round_to_2sf_after_int)
         df["ECOLI_ChangeNotes"] += "Rounded E. coli: nearest int then to 2 significant figures; "
 
-    # CFU formula validation
+    # CFU formula validation (±10 absolute tolerance)
     def check_dilution(row, prefix):
         try:
             count = row[f"{prefix}: Colonies Counted"]
@@ -610,13 +683,13 @@ def run_adv(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     all_zero_cols = [col for col in df.columns
                      if pd.api.types.is_numeric_dtype(df[col]) and (df[col].fillna(0) == 0).all()]
-    for col in all_zero_cols:
-        df["ADVANCED_ChangeNotes"] += f"Skipped checks for unmeasured parameter: {col}; "
+    for c in all_zero_cols:
+        df["ADVANCED_ChangeNotes"] += f"Skipped checks for unmeasured parameter: {c}; "
 
     def log_issue(idx, text):
         df.at[idx, "ADVANCED_ValidationNotes"] += text + "; "
 
-    # Column name checks (labels)
+    # Column label checks
     phosphate_cols = [c for c in df.columns if "phosphate" in c.lower() and "value" in c.lower() and c not in all_zero_cols]
     for c in phosphate_cols:
         if ("mg/l" not in c.lower()) and ("ppm" not in c.lower()):
@@ -753,7 +826,7 @@ tabs = st.tabs([
     "4️⃣ ADVANCED Validation",
     "5️⃣ RIPARIAN Validation",
     "🚀 Run All & Exports",
-    "🧹 Outlier Cleaner (IQR)",   
+    "🧹 Outlier Cleaner (IQR)",
     "📘Cleaning Guide",
 ])
 
@@ -991,13 +1064,11 @@ with tabs[7]:
     st.header("🧹 Outlier Cleaner (IQR)")
     st.caption("Set per-column outliers to NaN using IQR bounds (does not drop rows; metadata stays intact).")
 
-    # منبع داده: اولویت با Final_Combined اگر ساخته شده؛ در غیر اینصورت بهترین خروجی‌های تمیز قبلی
     src = first_available("df_final_combined", "df_adv_clean", "df_ecoli_clean", "df_general_clean", "df_original")
     if src is None:
         st.info("Upload a file in the first tab or run earlier steps.")
     else:
         st.write(f"**Source dataframe:** {len(src)} rows × {len(src.columns)} columns")
-        # کشف خودکار ستون‌های کیفی عددی
         auto_cols = detect_quality_numeric_columns(src)
 
         with st.expander("Select columns & options", expanded=True):
@@ -1043,8 +1114,7 @@ with tabs[7]:
                 with st.expander("Report preview"):
                     st.dataframe(report)
 
-
-# ------------------------ 8) GUIDE ------------------------
+# ------------------------ 9) GUIDE ------------------------
 with tabs[8]:
     st.header("📘 Download Data Cleaning Guide")
     st.markdown("Download the official data cleaning and validation guide.")
