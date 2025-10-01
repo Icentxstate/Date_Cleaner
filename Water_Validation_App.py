@@ -8,7 +8,7 @@
 # - Conductivity post-cal ±20% → cond cleared
 # - E. coli incubation/time/field blank/CFU mismatch/>200 → cleared
 # - Contextual outliers >3σ (per-site) → cleared
-# Plus: exports Final_Combined.xlsx + «داده‌های تمیز.xlsx»
+# Plus: exports Final_Combined.xlsx »
 
 import streamlit as st
 import pandas as pd
