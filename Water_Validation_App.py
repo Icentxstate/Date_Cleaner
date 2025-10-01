@@ -905,7 +905,7 @@ with tabs[5]:
 # ------------------------ RUN ALL & EXPORTS ------------------------
 with tabs[6]:
     st.header("🚀 Run All (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)")
-    st.caption("Final_Combined + «داده‌های تمیز.xlsx» ساخته می‌شود.")
+    st.caption("Final_Combined ")
 
     if not isinstance(st.session_state.df_original, pd.DataFrame):
         st.info("Upload a file in the first tab.")
