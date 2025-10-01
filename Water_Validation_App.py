@@ -19,8 +19,8 @@ from typing import Optional, Tuple
 
 from openpyxl import load_workbook  # noqa: F401
 
-st.set_page_config(layout="wide", page_title="🧪 Water Quality Data Validation App")
-st.title("🧪 Water Quality Data Validation App")
+st.set_page_config(layout="wide", page_title=" Water Quality Data Validation App")
+st.title(" Water Quality Data Validation App")
 
 COND_CANDIDATES = ["Conductivity (µS/cm)", "Conductivity (?S/cm)"]
 
