@@ -33,7 +33,7 @@ def tmp_dir():
     return st.session_state.tmpdir
 
 def mark_success(msg):
-    st.success("✅ " + msg)
+    st.success("Correct " + msg)
 
 def path_with_suffix(basename: str, suffix: str):
     d = tmp_dir()
@@ -773,20 +773,20 @@ def run_rip(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
 # ==== Tabs ====
 tabs = st.tabs([
-    "📁 Upload File",
-    "1️⃣ GENERAL Validation",
-    "2️⃣ CORE Validation",
-    "3️⃣ ECOLI Validation",
-    "4️⃣ ADVANCED Validation",
-    "5️⃣ RIPARIAN Validation",
-    "🚀 Run All & Exports",
-    "🧹 Outlier Cleaner (IQR)",
-    "📘Cleaning Guide",
+    " Upload File",
+    " GENERAL Validation",
+    " CORE Validation",
+    " ECOLI Validation",
+    " ADVANCED Validation",
+    " RIPARIAN Validation",
+    " Run All & Exports",
+    " Outlier Cleaner (IQR)",
+    "Cleaning Guide",
 ])
 
 # ------------------------ Upload ------------------------
 with tabs[0]:
-    st.header("📁 Upload Your Excel File (once)")
+    st.header(" Upload Your Excel File (once)")
     uploaded = st.file_uploader("Upload a .xlsx file", type=["xlsx"])
     if uploaded:
         st.session_state.input_basename = os.path.basename(uploaded.name)
@@ -800,7 +800,7 @@ with tabs[0]:
 
 # ------------------------ GENERAL ------------------------
 with tabs[1]:
-    st.header("1️⃣ GENERAL Validation")
+    st.header(" GENERAL Validation")
     if not isinstance(st.session_state.df_original, pd.DataFrame):
         st.info("Upload a file in the first tab to enable this step.")
     else:
@@ -820,7 +820,7 @@ with tabs[1]:
 
 # ------------------------ CORE ------------------------
 with tabs[2]:
-    st.header("2️⃣ CORE Validation")
+    st.header(" CORE Validation")
     src_core = first_available("df_general_clean")
     if src_core is None:
         st.info("Run GENERAL first (or use Run All).")
@@ -835,13 +835,13 @@ with tabs[2]:
             mark_success("CORE validation files generated.")
             c1, c2 = st.columns(2)
             with c1:
-                st.download_button("📥 Download cleaned_CORE.xlsx", data=open(p_clean, "rb").read(), file_name="cleaned_CORE.xlsx")
+                st.download_button(" Download cleaned_CORE.xlsx", data=open(p_clean, "rb").read(), file_name="cleaned_CORE.xlsx")
             with c2:
-                st.download_button("📥 Download annotated_CORE.xlsx", data=open(p_annot, "rb").read(), file_name="annotated_CORE.xlsx")
+                st.download_button(" Download annotated_CORE.xlsx", data=open(p_annot, "rb").read(), file_name="annotated_CORE.xlsx")
 
 # ------------------------ ECOLI ------------------------
 with tabs[3]:
-    st.header("3️⃣ ECOLI Validation")
+    st.header(" ECOLI Validation")
     src_ecoli = first_available("df_general_clean")
     if src_ecoli is None:
         st.info("Run GENERAL first (or use Run All).")
@@ -856,13 +856,13 @@ with tabs[3]:
             mark_success("ECOLI validation files generated.")
             c1, c2 = st.columns(2)
             with c1:
-                st.download_button("📥 Download cleaned_ECOLI.xlsx", data=open(p_clean, "rb").read(), file_name="cleaned_ECOLI.xlsx")
+                st.download_button(" Download cleaned_ECOLI.xlsx", data=open(p_clean, "rb").read(), file_name="cleaned_ECOLI.xlsx")
             with c2:
-                st.download_button("📥 Download annotated_ECOLI.xlsx", data=open(p_annot, "rb").read(), file_name="annotated_ECOLI.xlsx")
+                st.download_button(" Download annotated_ECOLI.xlsx", data=open(p_annot, "rb").read(), file_name="annotated_ECOLI.xlsx")
 
 # ------------------------ ADVANCED ------------------------
 with tabs[4]:
-    st.header("4️⃣ ADVANCED Validation")
+    st.header(" ADVANCED Validation")
     src_adv = first_available("df_ecoli_clean", "df_general_clean", require_nonempty=False)
     if src_adv is None:
         st.info("Run GENERAL (and optionally ECOLI) first, or use Run All.")
@@ -883,7 +883,7 @@ with tabs[4]:
 
 # ------------------------ RIPARIAN ------------------------
 with tabs[5]:
-    st.header("5️⃣ RIPARIAN Validation")
+    st.header(" RIPARIAN Validation")
     src_rip = first_available("df_adv_clean", "df_general_clean", require_nonempty=False)
     if src_rip is None:
         st.info("Run prior steps (or use Run All).")
@@ -898,13 +898,13 @@ with tabs[5]:
             mark_success("RIPARIAN validation files generated.")
             c1, c2 = st.columns(2)
             with c1:
-                st.download_button("📥 Download cleaned_RIPARIAN.xlsx", data=open(p_clean, "rb").read(), file_name="cleaned_RIPARIAN.xlsx")
+                st.download_button(" Download cleaned_RIPARIAN.xlsx", data=open(p_clean, "rb").read(), file_name="cleaned_RIPARIAN.xlsx")
             with c2:
-                st.download_button("📥 Download annotated_RIPARIAN.xlsx", data=open(p_annot, "rb").read(), file_name="annotated_RIPARIAN.xlsx")
+                st.download_button(" Download annotated_RIPARIAN.xlsx", data=open(p_annot, "rb").read(), file_name="annotated_RIPARIAN.xlsx")
 
 # ------------------------ RUN ALL & EXPORTS ------------------------
 with tabs[6]:
-    st.header("🚀 Run All (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)")
+    st.header(" Run All (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)")
     st.caption("Final_Combined ")
 
     if not isinstance(st.session_state.df_original, pd.DataFrame):
@@ -956,20 +956,20 @@ with tabs[6]:
             p_clean_all = path_with_suffix(base, "Cleaned_AllSteps"); save_excel(df_clean_all, p_clean_all)
             st.session_state.df_clean_all = df_clean_all.copy(); st.session_state.p_clean_all = p_clean_all
 
-            st.success("✅ All steps completed. Final_Combined + داده‌های تمیز آماده است.")
+            st.success(" All steps completed. Final_Combined + داده‌های تمیز آماده است.")
 
             c1, c2, c3 = st.columns(3)
             with c1:
-                st.download_button("📥 Download Final_Combined.xlsx", data=open(p_final, "rb").read(), file_name="Final_Combined.xlsx")
+                st.download_button(" Download Final_Combined.xlsx", data=open(p_final, "rb").read(), file_name="Final_Combined.xlsx")
             with c2:
-                st.download_button("📥 دانلود «داده‌های تمیز.xlsx»", data=open(p_clean_all, "rb").read(), file_name="داده‌های تمیز.xlsx")
+                st.download_button(" دانلود «داده‌های تمیز.xlsx»", data=open(p_clean_all, "rb").read(), file_name="داده‌های تمیز.xlsx")
             with c3:
                 mem_zip = io.BytesIO()
                 with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
                     for path in [p_g_clean, p_g_annot, p_c_clean, p_c_annot, p_e_clean, p_e_annot, p_a_clean, p_a_annot, p_r_clean, p_r_annot, p_final, p_clean_all]:
                         if os.path.exists(path): zf.write(path, arcname=os.path.basename(path))
                 mem_zip.seek(0)
-                st.download_button("📦 Download ALL outputs (ZIP incl. Final_Combined & Cleaned_AllSteps)", data=mem_zip.getvalue(), file_name=f"Validation_Outputs_{datetime.now().strftime('%Y%m%d_%H%M')}.zip", mime="application/zip")
+                st.download_button(" Download ALL outputs (ZIP incl. Final_Combined & Cleaned_AllSteps)", data=mem_zip.getvalue(), file_name=f"Validation_Outputs_{datetime.now().strftime('%Y%m%d_%H%M')}.zip", mime="application/zip")
 
 # ------------------------ IQR ------------------------
 with tabs[7]:
@@ -991,7 +991,7 @@ with tabs[7]:
                 base = st.session_state.input_basename or "input.xlsx"
                 p_clean = path_with_suffix(base, f"IQR_NoOutliers_k{str(k).replace('.','_')}"); p_report = os.path.join(tmp_dir(), f"IQR_Report_k{str(k).replace('.','_')}.csv")
                 save_excel(cleaned, p_clean); report.to_csv(p_report, index=False)
-                st.success("✅ IQR cleaning done. Downloads below:")
+                st.success(" IQR cleaning done. Downloads below:")
                 c1, c2 = st.columns(2)
                 with c1:
                     st.download_button("📥 Download IQR-cleaned Excel", data=open(p_clean, "rb").read(), file_name=os.path.basename(p_clean))
@@ -1002,7 +1002,7 @@ with tabs[7]:
 
 # ------------------------ Guide ------------------------
 with tabs[8]:
-    st.header("📘 Download Data Cleaning Guide")
+    st.header(" Download Data Cleaning Guide")
     st.markdown("Download the official data cleaning and validation guide.")
     guide_filename_on_disk = "Validation_Rules_for_Parameters.pdf"
     if os.path.exists(guide_filename_on_disk):
