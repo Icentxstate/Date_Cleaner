@@ -18,7 +18,7 @@ st.set_page_config(
 st.title("Water Quality Data Validation App")
 
 # -----------------------------------------------------------------------------
-# 1. CONFIG – COLUMN NAMES (adjust here if your headers are slightly different)
+# 1. CONFIG – COLUMN NAMES (edit here if your headers differ slightly)
 # -----------------------------------------------------------------------------
 
 COLUMN_MAP = {
@@ -47,7 +47,7 @@ COLUMN_MAP = {
     "rain_acc": ["Rainfall Accumulation", "Total Rainfall (inches)", "Total Rainfall"],
     "days_since_rain": ["Days Since Last Significant Rainfall"],
 
-    # QC FLAGS (optional / may not exist in all files)
+    # QC FLAGS (optional)
     "valid_flag": ["Validation", "Valid/Invalid", "Data Quality"],
 
     # E. COLI
@@ -88,7 +88,7 @@ COLUMN_MAP = {
 
 
 def find_col(df, candidates):
-    """Return the first column in df that matches candidates list."""
+    """Return the first column in df that matches the candidate list."""
     for c in candidates:
         if c in df.columns:
             return c
@@ -96,11 +96,11 @@ def find_col(df, candidates):
 
 
 # -----------------------------------------------------------------------------
-# 2. CATEGORIZATION
+# 2. COLUMN CATEGORIZATION
 # -----------------------------------------------------------------------------
 
 def categorize_columns(df):
-    """Return dict of category->list_of_columns based on known headers."""
+    """Return dict of category -> list_of_columns based on known headers."""
     cols = df.columns.tolist()
 
     core_cols = []
@@ -160,7 +160,7 @@ def categorize_columns(df):
 # -----------------------------------------------------------------------------
 
 def parse_datetime(df):
-    """Add unified datetime columns if possible."""
+    """Add unified datetime columns (_parsed_date, _parsed_time) if possible."""
     date_col = find_col(df, COLUMN_MAP["sample_date"])
     time_col = find_col(df, COLUMN_MAP["sample_time"])
 
@@ -189,16 +189,16 @@ def parse_datetime(df):
 
 
 def general_cleaning(df):
-    """Apply GENERAL rules that are data-based (no forms/expiry)."""
+    """Apply GENERAL rules that are directly data-based."""
     df = df.copy()
 
-    # remove exact duplicate rows
+    # Remove exact duplicate rows
     df = df.drop_duplicates().reset_index(drop=True)
 
-    # parse datetime
+    # Parse date & time
     df, date_col, time_col = parse_datetime(df)
 
-    # replace "valid"/"invalid" with blank (string columns only)
+    # Replace "valid"/"invalid" with blank (string/object columns only)
     for col in df.select_dtypes(include=["object"]).columns:
         df[col] = df[col].replace(
             {
@@ -211,7 +211,7 @@ def general_cleaning(df):
             }
         )
 
-    # sampling time-of-day QC – flag only
+    # Sampling time-of-day QC – flag only (no deletions)
     if "_parsed_time" in df.columns and df["_parsed_time"].notna().any():
         times = df["_parsed_time"].dropna().apply(lambda t: t.hour + t.minute / 60.0)
         if len(times) > 0:
@@ -225,7 +225,7 @@ def general_cleaning(df):
     else:
         df["QC_TimeOfDay_OK"] = np.nan
 
-    # sort by site + date + time
+    # Sort by Site + Date + Time for neatness
     site_col = find_col(df, COLUMN_MAP["site"])
     sort_cols = []
     if site_col:
@@ -246,6 +246,7 @@ def general_cleaning(df):
 # -----------------------------------------------------------------------------
 
 def clean_core(df):
+    """Apply CORE rules (depth, temp, DO, pH, cond, TDS, etc.)."""
     df = df.copy()
 
     flow_col = find_col(df, COLUMN_MAP["flow_severity"])
@@ -266,16 +267,18 @@ def clean_core(df):
     # --- Total Depth ---
     if total_depth_col:
         depth = pd.to_numeric(df[total_depth_col], errors="coerce")
-        depth = depth.mask(depth >= 998, np.nan)  # treat 999 etc. as missing
+        # Remove codes like 999
+        depth = depth.mask(depth >= 998, np.nan)
 
         if flow_col:
             flow = df[flow_col].astype(str).str.strip().str.lower()
+            # 0 depth is only allowed if flow indicates dry / no water
             mask_zero_bad = (depth == 0) & (~flow.isin(["dry", "no water", "6"]))
             depth = depth.mask(mask_zero_bad, np.nan)
 
         df[total_depth_col] = depth
 
-    # --- Sample Depth & QC flag ---
+    # --- Sample Depth QC (0.3m or half total depth) ---
     if sample_depth_col and total_depth_col:
         sdepth = pd.to_numeric(df[sample_depth_col], errors="coerce")
         tdepth = pd.to_numeric(df[total_depth_col], errors="coerce")
@@ -320,10 +323,11 @@ def clean_core(df):
 
         if tube_mod_col:
             tube_mod = df[tube_mod_col].astype(str)
+            # If original tube >1.2, we mark modifier as >1.2m
             tube_mod = tube_mod.mask(tube.isna() & over_mask, ">1.2m")
             df[tube_mod_col] = tube_mod
 
-    # --- Dissolved Oxygen duplicate titrations ---
+    # --- Dissolved Oxygen duplicate titration ---
     if do_avg_col and do1_col and do2_col:
         do1 = pd.to_numeric(df[do1_col], errors="coerce")
         do2 = pd.to_numeric(df[do2_col], errors="coerce")
@@ -340,6 +344,7 @@ def clean_core(df):
         if not col:
             continue
         temp = pd.to_numeric(df[col], errors="coerce")
+        # Reasonable physical range
         temp = temp.mask((temp < -5) | (temp > 50), np.nan)
         df[col] = temp.round(1)
 
@@ -347,6 +352,7 @@ def clean_core(df):
     if ph_col:
         ph = pd.to_numeric(df[ph_col], errors="coerce")
         ph = ph.mask((ph < 0) | (ph > 14), np.nan)
+        # Flag extreme pH as NaN (e.g., <2 or >12)
         ph = ph.mask((ph < 2) | (ph > 12), np.nan)
         df[ph_col] = ph.round(1)
 
@@ -382,6 +388,7 @@ def clean_core(df):
 # -----------------------------------------------------------------------------
 
 def clean_ecoli(df):
+    """Apply E. coli rules (0-values, colony count, incubation, etc.)."""
     df = df.copy()
 
     ecoli_avg_col = find_col(df, COLUMN_MAP["ecoli_avg"])
@@ -394,12 +401,14 @@ def clean_ecoli(df):
     blank_qc_col = find_col(df, COLUMN_MAP["ecoli_blank_qc"])
     optimal_col = find_col(df, COLUMN_MAP["ecoli_optimal_colony"])
 
-    # Remove any reported 0 – should be <1
+    # Remove reported 0 – should be <1 (in CSV we treat 0 as missing)
     if ecoli_avg_col:
         ecoli_avg = pd.to_numeric(df[ecoli_avg_col], errors="coerce")
         ecoli_avg = ecoli_avg.mask(ecoli_avg == 0, np.nan)
+        # Step 1: round to nearest whole
         ecoli_avg = ecoli_avg.round(0)
 
+        # Step 2: round that whole number to 2 significant figures
         def round_sig2_int(x):
             if pd.isna(x) or x == 0:
                 return x
@@ -415,7 +424,7 @@ def clean_ecoli(df):
         cfu = cfu.mask(cfu == 0, np.nan)
         df[col] = cfu
 
-    # colonies counted < 200
+    # Colonies counted < 200
     for col in [col1_col, col2_col]:
         if not col:
             continue
@@ -425,24 +434,24 @@ def clean_ecoli(df):
         if ecoli_avg_col:
             df.loc[bad, ecoli_avg_col] = np.nan
 
-    # incubation temperature 30–36 °C
+    # Incubation temperature 30–36 °C
     if temp_col:
         temp = pd.to_numeric(df[temp_col], errors="coerce")
         df["QC_Ecoli_Temp_30_36"] = (temp >= 30) & (temp <= 36)
 
-    # incubation period 28–31 hours (if hours)
+    # Incubation period 28–31 hours (if in hours)
     if hold_col:
         hold = pd.to_numeric(df[hold_col], errors="coerce")
         df["QC_Ecoli_Hold_28_31h"] = (hold >= 28) & (hold <= 31)
 
-    # field blank OK
+    # Field blank OK
     if blank_qc_col:
         blank = df[blank_qc_col].astype(str).str.strip().str.lower()
         df["QC_Ecoli_Blank_OK"] = blank.isin(
             ["yes", "true", "ok", "no growth", "none"]
         )
 
-    # optimal colony number flag
+    # Optional “optimal colony number” QC (if present)
     if optimal_col:
         df["QC_Ecoli_OptimalColonyFlag"] = df[optimal_col]
 
@@ -454,11 +463,12 @@ def clean_ecoli(df):
 # -----------------------------------------------------------------------------
 
 def clean_advanced(df):
+    """Apply ADVANCED rules (turbidity, discharge)."""
     df = df.copy()
     turb_col = find_col(df, COLUMN_MAP["turbidity"])
     discharge_col = find_col(df, COLUMN_MAP["discharge"])
 
-    # Turbidity: remove negative
+    # Turbidity: remove negative values
     if turb_col:
         turb = pd.to_numeric(df[turb_col], errors="coerce")
         turb = turb.mask(turb < 0, np.nan)
@@ -481,6 +491,7 @@ def clean_advanced(df):
 # -----------------------------------------------------------------------------
 
 def clean_riparian(df):
+    """Apply minimal RIPARIAN checks (bank evaluated, image submitted)."""
     df = df.copy()
     bank_col = find_col(df, COLUMN_MAP["bank_evaluated"])
     img_col = find_col(df, COLUMN_MAP["riparian_image"])
@@ -505,6 +516,11 @@ def clean_riparian(df):
 # -----------------------------------------------------------------------------
 
 def dsr_quantity_summary(df, category_cols):
+    """
+    Compute:
+      - number of sites per watershed
+      - number of events per site per parameter (for selected columns)
+    """
     site_col = find_col(df, COLUMN_MAP["site"])
     watershed_col = find_col(df, COLUMN_MAP["watershed"])
     param_cols = category_cols[:]
@@ -559,6 +575,11 @@ def dsr_quantity_summary(df, category_cols):
 
 
 def filter_dsr_ready(df, category_cols):
+    """
+    Filter to site/parameter combos that meet:
+      - >=10 valid events per parameter per site
+      - watershed has >=3 sites (if watershed column exists)
+    """
     df = df.copy()
     site_col = find_col(df, COLUMN_MAP["site"])
     watershed_col = find_col(df, COLUMN_MAP["watershed"])
@@ -603,7 +624,7 @@ def filter_dsr_ready(df, category_cols):
 def iqr_outlier_cleaner(df, cols, k=1.5):
     """
     Remove outliers using IQR rule for selected columns.
-    Returns filtered_df, mask_removed
+    Returns filtered_df, mask_removed.
     """
     df = df.copy()
     mask_keep = pd.Series(True, index=df.index)
@@ -627,11 +648,11 @@ def iqr_outlier_cleaner(df, cols, k=1.5):
 
 
 # -----------------------------------------------------------------------------
-# 10. Helper: compute all cleaned dfs once
+# 10. Helper: compute all cleaned dfs
 # -----------------------------------------------------------------------------
 
 def get_clean_dfs(raw_df):
-    """Run through full cleaning pipeline & categorization."""
+    """Run the full cleaning pipeline & categorization."""
     cats = categorize_columns(raw_df)
     gen_df = general_cleaning(raw_df)
     core_df = clean_core(gen_df)
@@ -668,23 +689,21 @@ tabs = st.tabs(
 # --- Tab 1: Upload File ------------------------------------------------------
 with tabs[0]:
     st.subheader("Upload File")
-    uploaded_file = st.file_uploader("یک فایل CSV بارگذاری کن", type=["csv"])
+    uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
 
     if uploaded_file is not None:
         raw_bytes = uploaded_file.read()
         raw_df = pd.read_csv(io.BytesIO(raw_bytes))
         st.session_state["raw_df"] = raw_df
         st.success(
-            f"فایل با {raw_df.shape[0]} ردیف و {raw_df.shape[1]} ستون خوانده شد."
+            f"File loaded with {raw_df.shape[0]} rows and {raw_df.shape[1]} columns."
         )
         st.dataframe(raw_df.head(30))
     else:
-        st.info("لطفاً فایل را اینجا آپلود کن. سپس به تب‌های بعدی برو.")
+        st.info("Please upload a CSV file here, then move to the other tabs.")
 
-# اگر هنوز فایل نداریم، تب‌های بعدی فقط پیام بدهند
 has_data = "raw_df" in st.session_state
 
-# اگر داده هست، یک بار همه تمیزکاری را حساب کن
 clean_context = None
 if has_data:
     clean_context = get_clean_dfs(st.session_state["raw_df"])
@@ -698,144 +717,148 @@ with tabs[1]:
     st.subheader("GENERAL Validation")
 
     if not has_data:
-        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
+        st.warning("First, upload a CSV file in the 'Upload File' tab.")
     else:
-        st.markdown("### نمونه‌ای از GENERAL cleaning")
-        st.write("داده‌ی خام (اولین ۲۰ ردیف):")
+        st.markdown("### Raw data (sample)")
         st.dataframe(st.session_state["raw_df"].head(20))
 
-        st.write("داده‌ی پس از GENERAL cleaning (اولین ۲۰ ردیف):")
+        st.markdown("### After GENERAL cleaning (sample)")
         st.dataframe(general_df.head(20))
 
-        st.markdown("### فلگ‌های GENERAL QC")
+        st.markdown("### GENERAL QC flags")
         qc_cols = [c for c in general_df.columns if c.startswith("QC_")]
         if qc_cols:
-            st.write("ستون‌های QC در این مرحله:")
+            st.write("QC columns created at this stage:")
             st.write(qc_cols)
             st.dataframe(general_df[qc_cols].head(30))
         else:
-            st.info("فلگ QC عمومی در این فایل ایجاد نشده است.")
+            st.info("No GENERAL QC columns were generated for this file.")
 
 # --- Tab 3: CORE Validation --------------------------------------------------
 with tabs[2]:
     st.subheader("CORE Validation")
 
     if not has_data:
-        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
+        st.warning("First, upload a CSV file in the 'Upload File' tab.")
     else:
         core_cols = categories["core"]
         if core_cols:
-            st.write("ستون‌های CORE شناسایی‌شده:")
+            st.write("Detected CORE columns:")
             st.write(core_cols)
-            st.dataframe(clean_df[core_cols + [c for c in clean_df.columns
-                         if c.startswith("QC_") and "Ecoli" not in c and "Riparian" not in c]].head(50))
+            qc_cols = [
+                c for c in clean_df.columns
+                if c.startswith("QC_")
+                and "Ecoli" not in c
+                and "Riparian" not in c
+            ]
+            view_cols = core_cols + qc_cols
+            st.dataframe(clean_df[view_cols].head(50))
         else:
-            st.warning("هیچ ستون CORE بر اساس COLUMN_MAP پیدا نشد.")
+            st.warning("No CORE columns found based on COLUMN_MAP.")
 
 # --- Tab 4: ECOLI Validation -------------------------------------------------
 with tabs[3]:
     st.subheader("ECOLI Validation")
 
     if not has_data:
-        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
+        st.warning("First, upload a CSV file in the 'Upload File' tab.")
     else:
         ecoli_cols = categories["ecoli"]
         if ecoli_cols:
-            st.write("ستون‌های ECOLI شناسایی‌شده:")
+            st.write("Detected ECOLI columns:")
             st.write(ecoli_cols)
             view_cols = ecoli_cols + [
-                c for c in clean_df.columns
-                if c.startswith("QC_Ecoli")
+                c for c in clean_df.columns if c.startswith("QC_Ecoli")
             ]
             st.dataframe(clean_df[view_cols].head(50))
         else:
-            st.warning("هیچ ستون ECOLI بر اساس COLUMN_MAP پیدا نشد.")
+            st.warning("No ECOLI columns found based on COLUMN_MAP.")
 
 # --- Tab 5: ADVANCED Validation ---------------------------------------------
 with tabs[4]:
     st.subheader("ADVANCED Validation")
 
     if not has_data:
-        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
+        st.warning("First, upload a CSV file in the 'Upload File' tab.")
     else:
         adv_cols = categories["advanced"]
         if adv_cols:
-            st.write("ستون‌های ADVANCED شناسایی‌شده:")
+            st.write("Detected ADVANCED columns:")
             st.write(adv_cols)
             st.dataframe(clean_df[adv_cols].head(50))
         else:
-            st.warning("هیچ ستون ADVANCED بر اساس COLUMN_MAP پیدا نشد.")
+            st.warning("No ADVANCED columns found based on COLUMN_MAP.")
 
 # --- Tab 6: RIPARIAN Validation ---------------------------------------------
 with tabs[5]:
     st.subheader("RIPARIAN Validation")
 
     if not has_data:
-        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
+        st.warning("First, upload a CSV file in the 'Upload File' tab.")
     else:
         rip_cols = categories["riparian"]
         if rip_cols:
-            st.write("ستون‌های RIPARIAN شناسایی‌شده:")
+            st.write("Detected RIPARIAN columns:")
             st.write(rip_cols)
             view_cols = rip_cols + [
-                c for c in clean_df.columns
-                if c.startswith("QC_Riparian")
+                c for c in clean_df.columns if c.startswith("QC_Riparian")
             ]
             st.dataframe(clean_df[view_cols].head(50))
         else:
-            st.warning("هیچ ستون RIPARIAN بر اساس COLUMN_MAP پیدا نشد.")
+            st.warning("No RIPARIAN columns found based on COLUMN_MAP.")
 
 # --- Tab 7: Run All & Exports -----------------------------------------------
 with tabs[6]:
     st.subheader("Run All & Exports")
 
     if not has_data:
-        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
+        st.warning("First, upload a CSV file in the 'Upload File' tab.")
     else:
-        st.markdown("### خلاصه‌ی DSR (کمیت داده‌ها)")
+        st.markdown("### DSR Quantity Summary")
         summary = dsr_quantity_summary(clean_df, all_param_cols)
 
-        st.markdown("**تعداد سایت‌ها در هر حوضه**")
+        st.markdown("**Number of sites per watershed**")
         st.dataframe(summary["watershed_site_counts"])
 
-        st.markdown("**تعداد رویداد برای هر پارامتر در هر سایت**")
+        st.markdown("**Number of events per parameter per site**")
         st.dataframe(summary["site_param_counts"])
 
         apply_dsr_filter = st.checkbox(
-            "اعمال فیلتر DSR (≥3 سایت در هر حوضه و ≥10 رویداد برای هر پارامتر/سایت)",
+            "Apply DSR filter (≥3 sites per watershed AND ≥10 events per parameter per site)",
             value=False
         )
 
         if apply_dsr_filter:
             dsr_ready_df = filter_dsr_ready(clean_df, all_param_cols)
             st.success(
-                f"تعداد ردیف‌های DSR-ready: {dsr_ready_df.shape[0]} "
-                f"(از مجموع {clean_df.shape[0]} ردیف تمیزشده)"
+                f"Number of DSR-ready rows: {dsr_ready_df.shape[0]} "
+                f"(out of {clean_df.shape[0]} cleaned rows)."
             )
         else:
             dsr_ready_df = clean_df.copy()
-            st.info("فیلتر DSR غیرفعال است. تمام داده‌های تمیزشده در نظر گرفته می‌شود.")
+            st.info("DSR filter is OFF. All cleaned data are included.")
 
-        st.markdown("### پیش‌نمایش داده‌ی تمیزشده‌ی نهایی")
+        st.markdown("### Preview of fully cleaned data")
         st.dataframe(clean_df.head(50))
 
-        st.markdown("### دانلود خروجی‌ها")
-        # 1) cleaned_data
+        st.markdown("### Download outputs")
+
+        # 1) Cleaned CSV (no DSR filter)
         buf_clean = io.BytesIO()
         clean_df.to_csv(buf_clean, index=False)
         st.download_button(
-            label="دانلود Cleaned CSV",
+            label="Download Cleaned CSV",
             data=buf_clean.getvalue(),
             file_name="cleaned_data.csv",
             mime="text/csv",
             key="download_clean"
         )
 
-        # 2) DSR-ready
+        # 2) DSR-ready CSV (if filter applied)
         buf_dsr = io.BytesIO()
         dsr_ready_df.to_csv(buf_dsr, index=False)
         st.download_button(
-            label="دانلود DSR-ready CSV",
+            label="Download DSR-ready CSV",
             data=buf_dsr.getvalue(),
             file_name="cleaned_data_DSR_ready.csv",
             mime="text/csv",
@@ -847,24 +870,24 @@ with tabs[7]:
     st.subheader("Outlier Cleaner (IQR)")
 
     if not has_data:
-        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
+        st.warning("First, upload a CSV file in the 'Upload File' tab.")
     else:
         st.write(
-            "در این بخش می‌توانی روی داده‌ی تمیزشده‌ی نهایی، "
-            "بر اساس قانون IQR، نقاط پرت را برای چند ستون عددی حذف کنی."
+            "Use this section to remove outliers from the cleaned dataset using the IQR rule "
+            "for selected numeric columns."
         )
 
         numeric_cols = clean_df.select_dtypes(include=[np.number]).columns.tolist()
         if not numeric_cols:
-            st.info("هیچ ستون عددی برای IQR یافت نشد.")
+            st.info("No numeric columns found for IQR-based outlier cleaning.")
         else:
             selected_cols = st.multiselect(
-                "ستون‌های عددی برای Outlier Cleaning (IQR):",
+                "Select numeric columns for IQR outlier cleaning:",
                 numeric_cols,
                 default=[]
             )
             k = st.slider(
-                "ضریب IQR (معمولاً 1.5):",
+                "IQR multiplier (typical value is 1.5):",
                 min_value=0.5,
                 max_value=3.0,
                 value=1.5,
@@ -877,22 +900,22 @@ with tabs[7]:
                 )
                 n_removed = mask_removed.sum()
                 st.write(
-                    f"تعداد ردیف حذف‌شده به‌عنوان outlier: {n_removed} "
-                    f"(از {clean_df.shape[0]} ردیف)"
+                    f"Number of rows removed as outliers: {n_removed} "
+                    f"(out of {clean_df.shape[0]} cleaned rows)."
                 )
                 st.dataframe(filtered_df.head(50))
 
                 buf_iqr = io.BytesIO()
                 filtered_df.to_csv(buf_iqr, index=False)
                 st.download_button(
-                    label="دانلود CSV بدون Outlier (IQR)",
+                    label="Download IQR-filtered CSV",
                     data=buf_iqr.getvalue(),
                     file_name="cleaned_data_IQR_filtered.csv",
                     mime="text/csv",
                     key="download_iqr"
                 )
             else:
-                st.info("ستونی را برای پاک‌سازی Outlier انتخاب کن.")
+                st.info("Select at least one numeric column to perform outlier cleaning.")
 
 # --- Tab 9: Cleaning Guide ---------------------------------------------------
 with tabs[8]:
@@ -900,58 +923,57 @@ with tabs[8]:
 
     st.markdown(
         """
-این تب خلاصه‌ای از راهنمای تمیزکاری است که بر اساس آن این اپ طراحی شده:
+This tab summarizes the cleaning rules that this app implements, based on your How-To guide.
 
 ### GENERAL
-- Remove data points that fall outside parameter/equipment ranges  
-- Remove repeat entries or duplicates  
-- Remove flagged data points  
-- Ensure a minimum of 3 sites per watershed  
-- Ensure a minimum of 10 viable monitoring events per parameter type, per site  
-- Remove extreme outliers (مثلاً اگر pH معمولاً 7.0 است و مقدار 1.3 گزارش شده)  
-- Ensure sampling was conducted at approximately the same time of day  
-- Any discrepancies in data are noted or explained in the “Comments” section  
-- None of the reagents used for testing are expired (این مورد بر اساس فرم است، نه CSV)  
-- After data has been cleaned, replace the data entries of “valid” and “invalid” as blank  
-- Once data has been cleaned, sort the data based on Site ID and date
+- Remove data points that fall outside parameter/equipment ranges.  
+- Remove repeat entries or duplicates.  
+- Remove flagged data points.  
+- Ensure a minimum of 3 sites per watershed.  
+- Ensure a minimum of 10 viable monitoring events per parameter type, per site.  
+- Remove extreme outliers (e.g., typical pH is 7.0 and a value of 1.3 is reported).  
+- Ensure sampling was conducted at approximately the same time of day.  
+- Any discrepancies in data are noted or explained in the “Comments” section.  
+- None of the reagents used for testing are expired (this must be checked on field forms / WWDV).  
+- After data have been cleaned, replace entries of “valid” and “invalid” with blank.  
+- Once data have been cleaned, sort data based on Site ID and chronological order.
 
 ### CORE
-- Sample Depth = 0.3 m یا نصف Total Depth  
-- Total Depth = 0 مگر اینکه Flow Severity بیانگر «بدون آب» باشد  
-- Dissolved Oxygen: دو تیتراسیون، اختلاف ≤ 0.5 mg/L، گزارش به یک رقم اعشار  
-- Secchi Transparency: متوسط درست، دو رقم معنی‌دار، و از عمق کل بیشتر نباشد  
-- Transparency Tube: دو رقم معنی‌دار، حداکثر گزارش >1.2m  
-- Calibration: pre و post، حداکثر 24 ساعت اختلاف با Sampling Time  
-- Conductivity:  
-  - کمتر از 100 µS/cm → عدد صحیح  
-  - بالاتر از 100 µS/cm → سه رقم معنی‌دار  
-- TDS = Conductivity × 0.65  
-- دماها به یک رقم اعشار، pH به یک رقم اعشار
+- Sample Depth is either 0.3 m or half of the Total Depth.  
+- Total Depth can be 0 only if Flow Severity indicates no water (dry).  
+- Dissolved Oxygen: duplicate samples with titration values within 0.5 mg/L; values reported to nearest tenth.  
+- Secchi Transparency: average is correct, reported to two significant figures, and not greater than Total Depth.  
+- Transparency Tube: reported to two significant figures and does not exceed 1.2 m (max report >1.2m).  
+- Conductivity calibration values fall within 20% of calibration standard (not enforced in CSV; for calibration logs).  
+- TDS calculated as TDS = conductivity × 0.65.  
+- Temperature (air/water): reported to nearest tenth, extreme values removed.  
+- pH: reported to nearest tenth; physically unreasonable values removed.
 
 ### E. COLI
-- Incubation Temperature بین 30–36°C  
-- Incubation Period بین 28–31 ساعت  
-- Dilution factor calculation صحیح  
-- Colonies counted < 200 per plate  
-- Field blank بدون رشد کلونی  
-- مقدار 0 برای E. coli باید به صورت <1 گزارش شود (در CSV به‌صورت NaN در نظر گرفته شده)  
-- E. coli Average: ابتدا به نزدیک‌ترین عدد صحیح، سپس به دو رقم معنی‌دار رُند می‌شود.
+- Incubation Temperature between 30–36°C.  
+- Incubation Period between 28–31 hours.  
+- Dilution factor calculations correct (to be checked where available).  
+- Colonies counted < 200 per plate.  
+- Field blank has no colony growth.  
+- Values reported as 0 should be treated as <1 (0 is set to missing in this CSV cleaner).  
+- E. coli Average: first rounded to nearest whole number, then to two significant figures.
 
 ### ADVANCED
-- Phosphate و Nitrate-N در mg/L  
-- Turbidity در NTU/JTU، مقادیر منفی حذف می‌شوند  
-- Streamflow / Discharge در ft²/sec یا cfs،  
-  - اگر <10 → یک رقم اعشار  
-  - اگر ≥10 → عدد صحیح
+- Phosphate and Nitrate-N recorded in mg/L.  
+- Turbidity recorded in NTU/JTU; negative values removed.  
+- Streamflow / Discharge recorded in ft²/sec or cfs:  
+  - <10 cfs → one decimal place.  
+  - ≥10 cfs → nearest whole number.
 
 ### RIPARIAN
-- Bank evaluated تکمیل شده باشد  
-- Indicators ارزیابی شده و اگر نه، در Comments توضیح داده شود  
-- Image of site submitted  
+- Bank evaluated is completed.  
+- Indicators are evaluated; if not, explained in the “Comments” section.  
+- Image of site is submitted.  
 
-این اپ تا جایی که اطلاعات در CSV موجود است، این قواعد را به صورت خودکار اعمال می‌کند.
-مواردی مثل تاریخ انقضای ریجنت‌ها یا توضیح اختلاف در Comments باید بیرون از CSV و به‌صورت دستی بررسی شوند.
+This app implements all rules that can be inferred directly from the CSV file.
+Items that depend on field paperwork (e.g., reagent expiration dates, detailed comments)
+must still be checked manually outside of this tool.
 """
     )
 
-st.caption("ساخته شده برای کمک به تهیه DSR/WSR با تمیزکاری استاندارد داده‌های کیفیت آب 🌊")
+st.caption("Built to support standardized cleaning of water quality data for DSR/WSR workflows 🌊")
