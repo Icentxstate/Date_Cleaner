@@ -1,1012 +1,957 @@
 # Water_Validation_App.py
-# Streamlit app for Water Quality Data Validation (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)
-# Now ENFORCES (not just flags):
-# - Transparency Tube 0–1.2 m → out-of-range cleared
-# - Secchi 0.2–5.0 m (TX QA) & Secchi > Depth → cleared
-# - DO titrations diff > 0.5 mg/L → DO values cleared
-# - Calibration time >24h (per-probe) → related probe data cleared
-# - Conductivity post-cal ±20% → cond cleared
-# - E. coli incubation/time/field blank/CFU mismatch/>200 → cleared
-# - Contextual outliers >3σ (per-site) → cleared
-# Plus: exports Final_Combined.xlsx »
+# Streamlit app for automated Water Quality Data Validation (CRP/TST-style)
 
-import streamlit as st
-import pandas as pd
+import io
 import numpy as np
-import tempfile, zipfile, io, os, re
+import pandas as pd
+import streamlit as st
 from datetime import datetime
-from typing import Optional, Tuple
 
-from openpyxl import load_workbook  # noqa: F401
+# -----------------------------------------------------------------------------
+# Page config
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="Water Quality Data Validation App",
+    layout="wide"
+)
 
-st.set_page_config(layout="wide", page_title=" Water Quality Data Validation App")
-st.title(" Water Quality Data Validation App")
+st.title("Water Quality Data Validation App")
 
-COND_CANDIDATES = ["Conductivity (µS/cm)", "Conductivity (?S/cm)"]
+# -----------------------------------------------------------------------------
+# 1. CONFIG – COLUMN NAMES (adjust here if your headers are slightly different)
+# -----------------------------------------------------------------------------
 
-def save_excel(df: pd.DataFrame, path: str):
-    df.to_excel(path, index=False, engine="openpyxl")
+COLUMN_MAP = {
+    "site": ["Site ID", "Site ID: Site Name", "Site ID: Site Name ", "Site"],
+    "sample_date": ["Sample Date", "Date"],
+    "sample_time": ["Sample Time Final Format", "Sample Time", "Time"],
+    "watershed": ["Watershed", "Watershed Name"],  # optional
 
-def tmp_dir():
-    if "tmpdir" not in st.session_state:
-        st.session_state.tmpdir = tempfile.mkdtemp(prefix="wqval_")
-    return st.session_state.tmpdir
+    # CORE
+    "sample_depth": ["Sample Depth (meters)", "Sample Depth (m)"],
+    "total_depth": ["Total Depth (meters)", "Total Depth (m)"],
+    "secchi": ["Secchi Disk Transparency - Average", "Secchi Transparency - Average"],
+    "secchi_mod": ["Secchi Disk Modifier", "Secchi Modifier"],
+    "tube": ["Transparency Tube (meters)", "Transparency Tube (m)"],
+    "tube_mod": ["Transparency Tube Modifier", "Transparency Tube Qualifier"],
+    "do_avg": ["Dissolved Oxygen (mg/L) Average", "Dissolved Oxygen (mg/L) avg"],
+    "do_1": ["Dissolved Oxygen (mg/L) 1st titration"],
+    "do_2": ["Dissolved Oxygen (mg/L) 2nd titration"],
+    "air_temp": ["Air Temperature (° C)", "Air Temp (° C)"],
+    "water_temp": ["Water Temperature (° C)", "Water Temp (° C)"],
+    "ph": ["pH (standard units)", "pH"],
+    "cond": ["Conductivity (?S/cm)", "Conductivity (µS/cm)", "Conductivity (uS/cm)"],
+    "tds": ["Total Dissolved Solids (mg/L)", "TDS (mg/L)"],
+    "salinity": ["Salinity (ppt)"],
+    "flow_severity": ["Flow Severity", "Flow severity"],
+    "rain_acc": ["Rainfall Accumulation", "Total Rainfall (inches)", "Total Rainfall"],
+    "days_since_rain": ["Days Since Last Significant Rainfall"],
 
-def mark_success(msg):
-    st.success("Correct " + msg)
+    # QC FLAGS (optional / may not exist in all files)
+    "valid_flag": ["Validation", "Valid/Invalid", "Data Quality"],
 
-def path_with_suffix(basename: str, suffix: str):
-    d = tmp_dir()
-    name, ext = os.path.splitext(basename)
-    return os.path.join(d, f"{name}_{suffix}.xlsx")
+    # E. COLI
+    "ecoli_avg": ["E. Coli Average", "E. coli Average"],
+    "ecoli_cfu1": ["Sample 1: Colony Forming Units per 100mL"],
+    "ecoli_cfu2": ["Sample 2: Colony Forming Units per 100mL"],
+    "ecoli_colonies1": ["Sample 1: Colonies Counted"],
+    "ecoli_colonies2": ["Sample 2: Colonies Counted"],
+    "ecoli_size1": ["Sample 1: Sample Size (mL)"],
+    "ecoli_size2": ["Sample 2: Sample Size (mL)"],
+    "ecoli_dil1": ["Sample 1: Dilution Factor (Manual)"],
+    "ecoli_dil2": ["Sample 2: Dilution Factor (Manual)"],
+    "ecoli_temp": ["Sample Temp (° C)", "Incubation Temperature (°C)"],
+    "ecoli_hold": ["Sample Hold Time", "Incubation Period (hours)"],
+    "ecoli_blank_qc": ["Field Blank QC", "No colony growth on Field Blank"],
+    "ecoli_incubation_qc": [
+        "Incubation time is between 24 hours",
+        "Incubation Period QC"
+    ],
+    "ecoli_optimal_colony": ["Optimal colony number is achieved (<200)"],
 
-def init_state():
-    for k in [
-        "input_basename",
-        "df_original",
-        "df_general_clean","df_general_annot",
-        "df_core_clean","df_core_annot",
-        "df_ecoli_clean","df_ecoli_annot",
-        "df_adv_clean","df_adv_annot",
-        "df_rip_clean","df_rip_annot",
-        "df_final_combined","p_final_combined",
-        "df_clean_all","p_clean_all",
-    ]:
-        st.session_state.setdefault(k, None)
-init_state()
+    # ADVANCED
+    "orthophosphate": ["Orthophosphate", "Phosphate (mg/L)"],
+    "orthophosphate_f": ["Filtered (Orthophosphate)"],
+    "nitrate_n": ["Nitrate-Nitrogen VALUE (ppm or mg/L)", "Nitrate-Nitrogen (mg/L)"],
+    "nitrate_f": ["Filtered (Nitrate-Nitrogen)"],
+    "nitrate": ["Nitrate"],
+    "turbidity": ["Turbidity Result (JTU)", "Turbidity (NTU)", "Turbidity"],
+    "cross_section": ["Waterbody Cross Section"],
+    "water_depth": ["Water Depth"],
+    "downstream_10ft": ["10-foot Downstream Measurement"],
+    "discharge": ["Discharge Recorded", "Streamflow (ft2/sec)", "Discharge (cfs)"],
 
-def first_available(*keys, require_nonempty: bool = False):
-    for k in keys:
-        df = st.session_state.get(k)
-        if isinstance(df, pd.DataFrame):
-            if (not require_nonempty) or (not df.empty):
-                return df
-    return None
+    # RIPARIAN (common fields)
+    "bank_evaluated": ["Bank Evaluated", "Bank evaluated is completed"],
+    "riparian_image": ["Image Submitted", "Image of site was submitted"],
+}
 
-def get_cond_col(df: pd.DataFrame) -> Optional[str]:
-    return next((c for c in COND_CANDIDATES if c in df.columns), None)
 
-def get_tt_col(df: pd.DataFrame) -> Optional[str]:
-    if "Transparency Tube (m)" in df.columns:
-        return "Transparency Tube (m)"
-    for c in df.columns:
-        cl = str(c).lower()
-        if "transparency" in cl and "tube" in cl:
-            return c
-    return None
-
-def get_secchi_col(df: pd.DataFrame) -> Optional[str]:
-    candidates = [
-        "Secchi Disk Transparency - Average",
-        "Secchi Transparency - Average",
-        "Secchi Depth (m)",
-        "Secchi (m)",
-        "Secchi"
-    ]
+def find_col(df, candidates):
+    """Return the first column in df that matches candidates list."""
     for c in candidates:
         if c in df.columns:
             return c
-    for c in df.columns:
-        cl = str(c).lower()
-        if "secchi" in cl and ("transpar" in cl or "depth" in cl):
-            return c
     return None
 
-def parse_hour_from_time_string(t) -> Optional[int]:
-    try:
-        s = str(t).strip()
-        m = re.match(r"^(\d{1,2})[:\.]?(\d{2})?", s)
-        if not m:
-            return None
-        h = int(m.group(1))
-        return h if 0 <= h <= 23 else None
-    except:
-        return None
 
-def try_parse_datetime(date_val, time_val=None) -> Optional[datetime]:
-    try:
-        if pd.isna(date_val):
-            return None
-        if isinstance(date_val, (pd.Timestamp, datetime)):
-            dt = pd.to_datetime(date_val).to_pydatetime()
-        else:
-            dt = pd.to_datetime(date_val, errors="coerce")
-            if pd.isna(dt):
-                return None
-            dt = dt.to_pydatetime()
-    except:
-        return None
-    if time_val is not None:
-        try:
-            s = str(time_val)
-            m = re.match(r"^(\d{1,2}):(\d{2})", s)
-            if m:
-                h, minute = int(m.group(1)), int(m.group(2))
-                if 0 <= h <= 23 and 0 <= minute <= 59:
-                    dt = dt.replace(hour=h, minute=minute, second=0, microsecond=0)
-                else:
-                    dt = dt.replace(hour=12, minute=0, second=0, microsecond=0)
-            else:
-                h = parse_hour_from_time_string(s)
-                if h is not None:
-                    dt = dt.replace(hour=h, minute=0, second=0, microsecond=0)
-                else:
-                    dt = dt.replace(hour=12, minute=0, second=0, microsecond=0)
-        except:
-            dt = dt.replace(hour=12, minute=0, second=0, microsecond=0)
-    return dt
+# -----------------------------------------------------------------------------
+# 2. CATEGORIZATION
+# -----------------------------------------------------------------------------
 
-def is_truthy_flag(val) -> bool:
-    if pd.isna(val):
-        return False
-    s = str(val).strip().lower()
-    return s in {"y","yes","true","1","flag","flagged","invalid","bad","exclude","remove"}
+def categorize_columns(df):
+    """Return dict of category->list_of_columns based on known headers."""
+    cols = df.columns.tolist()
 
-# ---------- IQR helpers ----------
-NON_QUALITY_KEYWORDS = ["Data","Unnamed","Sample","Site","Weather","Notes","Changes","All_","Present"]
+    core_cols = []
+    ecoli_cols = []
+    adv_cols = []
+    riparian_cols = []
+    general_cols = []
 
-def detect_quality_numeric_columns(df: pd.DataFrame, non_quality_keywords=NON_QUALITY_KEYWORDS):
-    cols = []
-    for c in df.columns:
-        name = str(c)
-        if not any(kw in name for kw in non_quality_keywords) and pd.api.types.is_numeric_dtype(df[c]):
-            cols.append(c)
-    return cols
-
-def compute_iqr_bounds(series: pd.Series, k: float = 1.5):
-    q1 = series.quantile(0.25)
-    q3 = series.quantile(0.75)
-    iqr = q3 - q1
-    lower = q1 - k * iqr
-    upper = q3 + k * iqr
-    return q1, q3, lower, upper
-
-def iqr_clean(df: pd.DataFrame, cols: list, k: float = 1.5):
-    out = df.copy()
-    rows = []
-    for col in cols:
-        s = pd.to_numeric(out[col], errors="coerce").dropna()
-        if s.empty:
-            rows.append({"column": col, "Q1": np.nan, "Q3": np.nan,"lower": np.nan,"upper": np.nan,
-                         "num_outliers": 0, "num_nonnull": 0, "pct_outliers": 0.0})
-            continue
-        q1, q3, lower, upper = compute_iqr_bounds(s, k=k)
-        mask = (out[col] < lower) | (out[col] > upper)
-        n_out = int(mask.sum())
-        n_nonnull = int(out[col].notna().sum())
-        pct = round((n_out / n_nonnull * 100.0), 3) if n_nonnull else 0.0
-        out.loc[mask, col] = np.nan
-        rows.append({"column": col, "Q1": q1, "Q3": q3, "lower": lower, "upper": upper,
-                     "num_outliers": n_out, "num_nonnull": n_nonnull, "pct_outliers": pct})
-    report = pd.DataFrame(rows)
-    return out, report
-
-def make_key(df: pd.DataFrame) -> pd.Series:
-    cols = []
-    if "Group or Affiliation" in df.columns: cols.append(df["Group or Affiliation"].astype(str))
-    if "Site ID: Site Name" in df.columns:   cols.append(df["Site ID: Site Name"].astype(str))
-    if "Sample Date" in df.columns:          cols.append(pd.to_datetime(df["Sample Date"], errors="coerce").dt.strftime("%Y-%m-%d").fillna(""))
-    if "Sample Time Final Format" in df.columns: cols.append(df["Sample Time Final Format"].astype(str))
-    if not cols: return df.index.astype(str)
-    out = cols[0].fillna("")
-    for c in cols[1:]: out = out.str.cat(c.fillna(""), sep="|")
-    return out
-
-def build_final_combined(base_df: pd.DataFrame,
-                         g_annot: Optional[pd.DataFrame],
-                         c_annot: Optional[pd.DataFrame],
-                         e_annot: Optional[pd.DataFrame],
-                         a_annot: Optional[pd.DataFrame],
-                         r_annot: Optional[pd.DataFrame]) -> pd.DataFrame:
-    final = base_df.copy()
-    final["_key_"] = make_key(final)
-    def pick(df, cols):
-        if df is None: return None
-        use = [c for c in cols if c in df.columns]
-        if not use: return None
-        tmp = df[use].copy(); tmp["_key_"] = make_key(df); return tmp
-    blocks = [
-        ("GENERAL_Notes",       pick(g_annot, ["ValidationNotes"])),
-        ("GENERAL_Changes",     pick(g_annot, ["TransformNotes"])),
-        ("CORE_Notes",          pick(c_annot, ["CORE_Notes"])),
-        ("CORE_Changes",        pick(c_annot, ["CORE_ChangeNotes"])),
-        ("ECOLI_Notes",         pick(e_annot, ["ECOLI_ValidationNotes"])),
-        ("ECOLI_Changes",       pick(e_annot, ["ECOLI_ChangeNotes"])),
-        ("ADVANCED_Notes",      pick(a_annot, ["ADVANCED_ValidationNotes"])),
-        ("ADVANCED_Changes",    pick(a_annot, ["ADVANCED_ChangeNotes"])),
-        ("RIPARIAN_Notes",      pick(r_annot, ["RIPARIAN_ValidationNotes"])),
-        ("RIPARIAN_Changes",    pick(r_annot, ["RIPARIAN_ChangeNotes"])),
+    core_keys = [
+        "sample_depth", "total_depth", "secchi", "secchi_mod", "tube", "tube_mod",
+        "do_avg", "do_1", "do_2", "air_temp", "water_temp", "ph", "cond", "tds",
+        "salinity", "flow_severity", "rain_acc", "days_since_rain"
     ]
-    for label, blk in blocks:
-        if blk is None: final[label] = ""; continue
-        val_cols = [c for c in blk.columns if c != "_key_"]
-        if not val_cols: final[label] = ""; continue
-        value_col = val_cols[0]
-        blk_ren = blk[["_key_", value_col]].rename(columns={value_col: label})
-        final = final.merge(blk_ren, on="_key_", how="left"); final[label] = final[label].fillna("")
-    def cat_cols(row, cols):
-        vals = [str(row[c]).strip() for c in cols if c in row.index and str(row[c]).strip() != ""]
-        return " | ".join(vals)
-    note_cols = ["GENERAL_Notes","CORE_Notes","ECOLI_Notes","ADVANCED_Notes","RIPARIAN_Notes"]
-    chg_cols  = ["GENERAL_Changes","CORE_Changes","ECOLI_Changes","ADVANCED_Changes","RIPARIAN_Changes"]
-    final["All_Notes"] = final.apply(lambda r: cat_cols(r, note_cols), axis=1)
-    final["All_ChangeNotes"] = final.apply(lambda r: cat_cols(r, chg_cols), axis=1)
-    ordered = [c for c in final.columns if c not in ["_key_", "All_Notes", "All_ChangeNotes"]]
-    final = final[ordered + ["All_Notes", "All_ChangeNotes"]]
-    final.drop(columns=["_key_"], inplace=True, errors="ignore")
-    return final
-
-# -------------------- GENERAL --------------------
-def run_general(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    df = df0.copy()
-    df["ValidationNotes"] = ""
-    df["ValidationColorKey"] = ""
-    df["TransformNotes"] = ""
-
-    cond_col = get_cond_col(df)
-    row_delete_indices = set()
-
-    # Duplicates
-    key_cols = [c for c in ["Group or Affiliation","Site ID: Site Name","Sample Date","Sample Time Final Format"] if c in df.columns]
-    if len(key_cols) >= 2:
-        dup_mask = df.duplicated(subset=key_cols, keep="first")
-        df.loc[dup_mask, "ValidationNotes"] += "Duplicate row (same site/date/time); "
-        row_delete_indices.update(df[dup_mask].index.tolist())
-
-    # Flagged rows
-    flag_cols = [c for c in df.columns if "flag" in c.lower()]
-    if flag_cols:
-        fl_mask = df[flag_cols].applymap(is_truthy_flag).any(axis=1)
-        df.loc[fl_mask, "ValidationNotes"] += "Row flagged by data flag column; "
-        row_delete_indices.update(df[fl_mask].index.tolist())
-
-    # Watershed site count >=3
-    if "Group or Affiliation" in df.columns and "Site ID: Site Name" in df.columns:
-        site_counts = df.groupby("Group or Affiliation")["Site ID: Site Name"].nunique()
-        invalid_ws = site_counts[site_counts < 3].index
-        mask = df["Group or Affiliation"].isin(invalid_ws)
-        df.loc[mask, "ValidationNotes"] += "Less than 3 sites in watershed; "
-        df.loc[mask, "ValidationColorKey"] += "watershed_or_events;"
-        row_delete_indices.update(df[mask].index.tolist())
-
-    # Site event count >=10
-    if "Site ID: Site Name" in df.columns and "Sample Date" in df.columns:
-        df["Sample Date"] = pd.to_datetime(df["Sample Date"], errors="coerce")
-        event_counts = df.groupby("Site ID: Site Name")["Sample Date"].nunique()
-        low_event_sites = event_counts[event_counts < 10].index
-        mask = df["Site ID: Site Name"].isin(low_event_sites)
-        df.loc[mask, "ValidationNotes"] += "Fewer than 10 events; "
-        df.loc[mask, "ValidationColorKey"] += "watershed_or_events;"
-        row_delete_indices.update(df[mask].index.tolist())
-
-    # Invalid Sample Date
-    if "Sample Date" in df.columns:
-        mask = df["Sample Date"].isna()
-        df.loc[mask, "ValidationNotes"] += "Missing or invalid Sample Date; "
-        df.loc[mask, "ValidationColorKey"] += "time;"
-        row_delete_indices.update(df[mask].index.tolist())
-
-    # Sample Time parsing + midday note (note-only)
-    if "Sample Time Final Format" in df.columns:
-        mask_bad = df["Sample Time Final Format"].apply(lambda t: parse_hour_from_time_string(t) is None)
-        df.loc[mask_bad, "ValidationNotes"] += "Unparsable Sample Time; "
-        df.loc[mask_bad, "ValidationColorKey"] += "time;"
-        row_delete_indices.update(df[mask_bad].index.tolist())
-        hours = df["Sample Time Final Format"].apply(parse_hour_from_time_string)
-        mask_mid = hours.apply(lambda h: (h is not None) and (12 <= h < 16))
-        df.loc[mask_mid, "ValidationNotes"] += "Sample time in 12:00–16:00 window (verify consistency); "
-
-    # Missing all core params → drop row
-    core_params = [
-        "pH (standard units)",
-        "Dissolved Oxygen (mg/L) Average",
-        "Water Temperature (° C)",
-        cond_col if cond_col else "Conductivity (µS/cm)",
-        "Salinity (ppt)",
+    ecoli_keys = [
+        "ecoli_avg", "ecoli_cfu1", "ecoli_cfu2", "ecoli_colonies1",
+        "ecoli_colonies2", "ecoli_size1", "ecoli_size2", "ecoli_dil1",
+        "ecoli_dil2", "ecoli_temp", "ecoli_hold", "ecoli_blank_qc",
+        "ecoli_incubation_qc", "ecoli_optimal_colony"
     ]
-    for idx, row in df.iterrows():
-        vals = []
-        for p in core_params:
-            if p in df.columns:
-                vals.append(row.get(p))
-        if vals and all((pd.isna(v) or v == 0) for v in vals):
-            df.at[idx, "ValidationNotes"] += "All core parameters missing or invalid; "
-            df.at[idx, "ValidationColorKey"] += "range;"
-            row_delete_indices.add(idx)
+    adv_keys = [
+        "orthophosphate", "orthophosphate_f", "nitrate_n", "nitrate_f",
+        "nitrate", "turbidity", "cross_section", "water_depth",
+        "downstream_10ft", "discharge"
+    ]
+    rip_keys = ["bank_evaluated", "riparian_image"]
 
-    # Standard ranges & notes
-    standard_ranges = {}; note_texts = {}
-    if cond_col:
-        standard_ranges[cond_col] = (50, 1500); note_texts[cond_col] = "Conductivity out of range [50–1500]; "
-    # Transparency Tube
-    tt_col = get_tt_col(df)
-    if tt_col and tt_col in df.columns:
-        if "(m" not in str(tt_col).lower():
-            df["ValidationNotes"] += f"{tt_col} unit not labeled as meters (m); assumed meters; "
-            df["ValidationColorKey"] += "unit;"
-        df[tt_col] = pd.to_numeric(df[tt_col], errors="coerce")
-        standard_ranges[tt_col] = (0.0, 1.2)
-        note_texts[tt_col] = "Transparency Tube out of equipment range [0–1.2 m]; "
-    # Secchi TX QA
-    secchi_col = get_secchi_col(df)
-    if secchi_col and secchi_col in df.columns:
-        if "(m" not in str(secchi_col).lower():
-            df["ValidationNotes"] += f"{secchi_col} unit not labeled as meters (m); assumed meters; "
-            df["ValidationColorKey"] += "unit;"
-        df[secchi_col] = pd.to_numeric(df[secchi_col], errors="coerce")
-        standard_ranges[secchi_col] = (0.2, 5.0)
-        note_texts[secchi_col] = "Secchi out of Texas-practical QA window [0.2–5.0 m]; "
+    used_cols = set()
 
-    extra = {
-        "pH (standard units)": ((6.5, 9.0), "pH out of range [6.5–9.0]; "),
-        "Dissolved Oxygen (mg/L) Average": ((5.0, 14.0), "DO out of range [5.0–14.0]; "),
-        "Salinity (ppt)": ((0, 35), "Salinity out of range [0–35]; "),
-        "Water Temperature (° C)": ((0, 35), "Temp out of range [0–35]; "),
-        "Air Temperature (° C)": ((-10, 50), "Air Temp out of range [-10–50]; "),
-        "Turbidity": ((0, 1000), "Turbidity out of range [0–1000]; "),
-        "E. Coli Average": ((1, 235), "E. Coli out of range [1–235]; "),
-        "Nitrate-Nitrogen VALUE (ppm or mg/L)": ((0, 10), "Nitrate out of range [0–10]; "),
-        "Orthophosphate": ((0, 0.5), "Orthophosphate out of range [0–0.5]; "),
-        "DO (%)": ((80, 120), "DO % out of range [80–120]; "),
-        "Total Phosphorus (mg/L)": ((0, 0.05), "TP out of range [0–0.05]; "),
+    def add_cols(keys, target_list):
+        for key in keys:
+            c = find_col(df, COLUMN_MAP.get(key, []))
+            if c:
+                target_list.append(c)
+                used_cols.add(c)
+
+    add_cols(core_keys, core_cols)
+    add_cols(ecoli_keys, ecoli_cols)
+    add_cols(adv_keys, adv_cols)
+    add_cols(rip_keys, riparian_cols)
+
+    # everything else => general
+    for c in cols:
+        if c not in used_cols:
+            general_cols.append(c)
+
+    return {
+        "core": core_cols,
+        "ecoli": ecoli_cols,
+        "advanced": adv_cols,
+        "riparian": riparian_cols,
+        "general": general_cols,
     }
-    for k,(rng,txt) in extra.items(): standard_ranges[k] = rng; note_texts[k] = txt
 
-    # Apply ranges → clear cells
-    for col, (mn, mx) in standard_ranges.items():
-        if col in df.columns:
-            vals = pd.to_numeric(df[col], errors="coerce")
-            m = (vals < mn) | (vals > mx)
-            df.loc[m, "ValidationNotes"] += note_texts[col]
-            df.loc[m, "ValidationColorKey"] += "range;"
-            df.loc[m, col] = np.nan
 
-    # Contextual outliers (>3σ) → CLEAR (not just flag)
-    if "Site ID: Site Name" in df.columns:
-        for col in standard_ranges:
-            if col in df.columns:
-                vals = pd.to_numeric(df[col], errors="coerce")
-                means = vals.groupby(df["Site ID: Site Name"]).transform("mean")
-                stds  = vals.groupby(df["Site ID: Site Name"]).transform("std")
-                z = (vals - means) / stds
-                mask = z.abs() > 3
-                idxs = mask[mask].index
-                df.loc[idxs, "ValidationNotes"] += f"{col} contextual outlier (>3σ) cleared; "
-                df.loc[idxs, "ValidationColorKey"] += "contextual_outlier;"
-                df.loc[idxs, col] = np.nan
+# -----------------------------------------------------------------------------
+# 3. GENERAL CLEANING
+# -----------------------------------------------------------------------------
 
-    # Expired reagents → note (clearing specific params بدون نقشه سِت تجهیز ممکن نیست)
-    if "Chemical Reagents Used" in df.columns:
-        mask = df["Chemical Reagents Used"].astype(str).str.contains("expired", case=False, na=False)
-        df.loc[mask, "ValidationNotes"] += "Expired reagents used; "
-        df.loc[mask, "ValidationColorKey"] += "expired;"
+def parse_datetime(df):
+    """Add unified datetime columns if possible."""
+    date_col = find_col(df, COLUMN_MAP["sample_date"])
+    time_col = find_col(df, COLUMN_MAP["sample_time"])
 
-    # Comments if flagged
-    if "Comments" in df.columns:
-        empty = df["Comments"].isna() | (df["Comments"].astype(str).str.strip() == "")
-        flagged = df["ValidationNotes"] != ""
-        mask = flagged & empty
-        df.loc[mask, "ValidationNotes"] += "No explanation in Comments; "
-        df.loc[mask, "ValidationColorKey"] += "comments;"
+    if date_col is None:
+        return df, None, None
 
-    # Clean text 'valid/invalid'
-    replaced = df.replace(to_replace=r'(?i)\b(valid|invalid)\b', value='', regex=True)
-    changed = replaced != df; df.update(replaced)
-    df.loc[changed.any(axis=1), "TransformNotes"] += "Removed 'valid/invalid'; "
+    df["_parsed_date"] = pd.to_datetime(df[date_col], errors="coerce")
 
-    # Sort
-    if "Site ID: Site Name" in df.columns and "Sample Date" in df.columns:
-        df.sort_values(by=["Site ID: Site Name", "Sample Date"], inplace=True)
+    if time_col and df[time_col].notna().any():
+        def _parse_t(x):
+            if pd.isna(x):
+                return None
+            x = str(x).strip()
+            for fmt in ["%H:%M", "%H:%M:%S", "%I:%M %p"]:
+                try:
+                    return datetime.strptime(x, fmt).time()
+                except Exception:
+                    continue
+            return None
 
-    df_clean = df.drop(index=list(row_delete_indices))
-    return df_clean, df
+        df["_parsed_time"] = df[time_col].apply(_parse_t)
+    else:
+        df["_parsed_time"] = None
 
-# -------------------- CORE --------------------
-def run_core(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    df = df0.copy()
-    df["CORE_Notes"] = ""
-    df["CORE_ChangeNotes"] = ""
-    row_delete_indices = set()
+    return df, date_col, time_col
 
-    cond_col = get_cond_col(df)
 
-    # Helpers to clear params per calibration issue
-    def clear_param_by_name(idx, pname):
-        pname = (pname or "").lower()
-        if "conductivity" in pname and cond_col and cond_col in df.columns:
-            df.at[idx, cond_col] = np.nan
-            df.at[idx, "CORE_ChangeNotes"] += "Conductivity cleared due to calibration timing; "
-        elif pname == "ph" or "ph" in pname:
-            col = "pH (standard units)"
-            if col in df.columns:
-                df.at[idx, col] = np.nan
-                df.at[idx, "CORE_ChangeNotes"] += "pH cleared due to calibration timing; "
-        elif "dissolved" in pname or "oxygen" in pname or "do" == pname:
-            avg = "Dissolved Oxygen (mg/L) Average"
-            do1 = "Dissolved Oxygen (mg/L) 1st titration"
-            do2 = "Dissolved Oxygen (mg/L) 2nd titration"
-            for c in [avg, do1, do2]:
-                if c in df.columns:
-                    df.at[idx, c] = np.nan
-            df.at[idx, "CORE_ChangeNotes"] += "DO cleared due to calibration timing; "
+def general_cleaning(df):
+    """Apply GENERAL rules that are data-based (no forms/expiry)."""
+    df = df.copy()
 
-    # Sample depth 0.3m or mid
-    if "Sample Depth (meters)" in df.columns and "Total Depth (meters)" in df.columns:
-        for idx, row in df.iterrows():
-            sample = row["Sample Depth (meters)"]; total = row["Total Depth (meters)"]
-            try:
-                if not (np.isclose(sample, 0.3, atol=0.05) or np.isclose(sample, total / 2, atol=0.05)):
-                    df.at[idx, "CORE_Notes"] += "Sample Depth not 0.3m or mid-depth; "
-            except: pass
+    # remove exact duplicate rows
+    df = df.drop_duplicates().reset_index(drop=True)
 
-    # Depth=0 requires Flow=6 → drop row
-    if "Flow Severity" in df.columns and "Total Depth (meters)" in df.columns:
-        mask = (df["Total Depth (meters)"] == 0) & (df["Flow Severity"] != 6)
-        df.loc[mask, "CORE_Notes"] += "Zero Depth with non-dry flow; "
-        row_delete_indices.update(df[mask].index.tolist())
+    # parse datetime
+    df, date_col, time_col = parse_datetime(df)
 
-    # DO titrations presence + difference
-    do1, do2 = "Dissolved Oxygen (mg/L) 1st titration", "Dissolved Oxygen (mg/L) 2nd titration"
-    has1, has2 = (do1 in df.columns), (do2 in df.columns)
-    if has1 ^ has2:
-        missing = do1 if not has1 else do2
-        df["CORE_Notes"] += f"Missing DO titration column: {missing}; "
-    if has1 and has2:
-        diff = (pd.to_numeric(df[do1], errors="coerce") - pd.to_numeric(df[do2], errors="coerce")).abs()
-        mask = diff > 0.5
-        df.loc[mask, "CORE_Notes"] += "DO Difference > 0.5; "
-        # ENFORCE: clear DO values if mismatch
-        for c in [do1, do2, "Dissolved Oxygen (mg/L) Average"]:
-            if c in df.columns:
-                df.loc[mask, c] = np.nan
-        df["CORE_ChangeNotes"] += "Cleared DO (diff>0.5); "
+    # replace "valid"/"invalid" with blank (string columns only)
+    for col in df.select_dtypes(include=["object"]).columns:
+        df[col] = df[col].replace(
+            {
+                "valid": "",
+                "Valid": "",
+                "VALID": "",
+                "invalid": "",
+                "Invalid": "",
+                "INVALID": "",
+            }
+        )
 
-        # Round stored DOs when valid
-        df["DO1 Rounded"] = pd.to_numeric(df[do1], errors="coerce").round(1)
-        df["DO2 Rounded"] = pd.to_numeric(df[do2], errors="coerce").round(1)
-        df["CORE_ChangeNotes"] += "Rounded DO to 0.1; "
+    # sampling time-of-day QC – flag only
+    if "_parsed_time" in df.columns and df["_parsed_time"].notna().any():
+        times = df["_parsed_time"].dropna().apply(lambda t: t.hour + t.minute / 60.0)
+        if len(times) > 0:
+            median_hour = times.median()
+            df["_sample_hour"] = df["_parsed_time"].apply(
+                lambda t: t.hour + t.minute / 60.0 if pd.notna(t) else np.nan
+            )
+            df["QC_TimeOfDay_OK"] = np.abs(df["_sample_hour"] - median_hour) <= 4
+        else:
+            df["QC_TimeOfDay_OK"] = np.nan
+    else:
+        df["QC_TimeOfDay_OK"] = np.nan
 
-    # Secchi: 2 sig figs + remove if > depth
-    secchi = get_secchi_col(df) or "Secchi Disk Transparency - Average"
-    if secchi in df.columns and "Total Depth (meters)" in df.columns:
-        def to_two_sigfigs(x):
-            try:
-                v = float(x)
-                if v == 0 or np.isnan(v): return v
-                k = int(np.floor(np.log10(abs(v))))
-                return round(v, -k + 1)
-            except: return x
-        before = df[secchi].copy()
-        df[secchi] = pd.to_numeric(df[secchi], errors="coerce").apply(to_two_sigfigs)
-        changed = before != df[secchi]
-        if changed.any():
-            df.loc[changed, "CORE_ChangeNotes"] += "Secchi rounded to 2 significant figures; "
-        mask_gt = pd.to_numeric(df[secchi], errors="coerce") > pd.to_numeric(df["Total Depth (meters)"], errors="coerce")
-        if mask_gt.any():
-            df.loc[mask_gt, "CORE_Notes"] += "Secchi > Depth; "
-            df.loc[mask_gt, secchi] = np.nan
+    # sort by site + date + time
+    site_col = find_col(df, COLUMN_MAP["site"])
+    sort_cols = []
+    if site_col:
+        sort_cols.append(site_col)
+    if "_parsed_date" in df.columns:
+        sort_cols.append("_parsed_date")
+    if "_parsed_time" in df.columns:
+        sort_cols.append("_parsed_time")
 
-    # Conductivity auto-format per guide (format only)
+    if sort_cols:
+        df = df.sort_values(sort_cols).reset_index(drop=True)
+
+    return df
+
+
+# -----------------------------------------------------------------------------
+# 4. CORE CLEANING
+# -----------------------------------------------------------------------------
+
+def clean_core(df):
+    df = df.copy()
+
+    flow_col = find_col(df, COLUMN_MAP["flow_severity"])
+    sample_depth_col = find_col(df, COLUMN_MAP["sample_depth"])
+    total_depth_col = find_col(df, COLUMN_MAP["total_depth"])
+    secchi_col = find_col(df, COLUMN_MAP["secchi"])
+    tube_col = find_col(df, COLUMN_MAP["tube"])
+    tube_mod_col = find_col(df, COLUMN_MAP["tube_mod"])
+    do_avg_col = find_col(df, COLUMN_MAP["do_avg"])
+    do1_col = find_col(df, COLUMN_MAP["do_1"])
+    do2_col = find_col(df, COLUMN_MAP["do_2"])
+    air_col = find_col(df, COLUMN_MAP["air_temp"])
+    water_col = find_col(df, COLUMN_MAP["water_temp"])
+    ph_col = find_col(df, COLUMN_MAP["ph"])
+    cond_col = find_col(df, COLUMN_MAP["cond"])
+    tds_col = find_col(df, COLUMN_MAP["tds"])
+
+    # --- Total Depth ---
+    if total_depth_col:
+        depth = pd.to_numeric(df[total_depth_col], errors="coerce")
+        depth = depth.mask(depth >= 998, np.nan)  # treat 999 etc. as missing
+
+        if flow_col:
+            flow = df[flow_col].astype(str).str.strip().str.lower()
+            mask_zero_bad = (depth == 0) & (~flow.isin(["dry", "no water", "6"]))
+            depth = depth.mask(mask_zero_bad, np.nan)
+
+        df[total_depth_col] = depth
+
+    # --- Sample Depth & QC flag ---
+    if sample_depth_col and total_depth_col:
+        sdepth = pd.to_numeric(df[sample_depth_col], errors="coerce")
+        tdepth = pd.to_numeric(df[total_depth_col], errors="coerce")
+        cond_03 = np.isclose(sdepth, 0.3, atol=0.05)
+        cond_half = np.isclose(sdepth, 0.5 * tdepth, atol=0.05)
+        df["QC_SampleDepth_OK"] = cond_03 | cond_half
+        df.loc[
+            (sdepth.notna()) & (~df["QC_SampleDepth_OK"]),
+            "QC_SampleDepth_OK"
+        ] = False
+
+    # --- Secchi vs Total Depth ---
+    if secchi_col and total_depth_col:
+        secchi = pd.to_numeric(df[secchi_col], errors="coerce")
+        tdepth = pd.to_numeric(df[total_depth_col], errors="coerce")
+        secchi = secchi.mask(
+            (secchi.notna()) & (tdepth.notna()) & (secchi > tdepth),
+            np.nan
+        )
+
+        def round_sig(x, sig=2):
+            if pd.isna(x) or x == 0:
+                return x
+            return float(f"{float(x):.{sig}g}")
+
+        secchi = secchi.apply(round_sig)
+        df[secchi_col] = secchi
+
+    # --- Transparency Tube ---
+    if tube_col:
+        tube = pd.to_numeric(df[tube_col], errors="coerce")
+        over_mask = tube > 1.2
+        tube = tube.mask(over_mask, np.nan)
+
+        def round_sig2(x):
+            if pd.isna(x) or x == 0:
+                return x
+            return float(f"{float(x):.2g}")
+
+        tube = tube.apply(round_sig2)
+        df[tube_col] = tube
+
+        if tube_mod_col:
+            tube_mod = df[tube_mod_col].astype(str)
+            tube_mod = tube_mod.mask(tube.isna() & over_mask, ">1.2m")
+            df[tube_mod_col] = tube_mod
+
+    # --- Dissolved Oxygen duplicate titrations ---
+    if do_avg_col and do1_col and do2_col:
+        do1 = pd.to_numeric(df[do1_col], errors="coerce")
+        do2 = pd.to_numeric(df[do2_col], errors="coerce")
+        diff = (do1 - do2).abs()
+        df["QC_DO_dup_within_0.5"] = diff <= 0.5
+        do_avg = (do1 + do2) / 2.0
+        do_avg = do_avg.mask(diff > 0.5, np.nan)
+        df[do1_col] = do1.round(1)
+        df[do2_col] = do2.round(1)
+        df[do_avg_col] = do_avg.round(1)
+
+    # --- Temperature (Air & Water) ---
+    for col in [air_col, water_col]:
+        if not col:
+            continue
+        temp = pd.to_numeric(df[col], errors="coerce")
+        temp = temp.mask((temp < -5) | (temp > 50), np.nan)
+        df[col] = temp.round(1)
+
+    # --- pH ---
+    if ph_col:
+        ph = pd.to_numeric(df[ph_col], errors="coerce")
+        ph = ph.mask((ph < 0) | (ph > 14), np.nan)
+        ph = ph.mask((ph < 2) | (ph > 12), np.nan)
+        df[ph_col] = ph.round(1)
+
+    # --- Conductivity ---
     if cond_col:
-        def cond_auto_format(val):
-            try:
-                v = float(val)
-                if v > 100: return float(int(round(v / 10.0)) * 10)
-                else:       return float(int(round(v)))
-            except: return val
-        before = df[cond_col].copy()
-        df[cond_col] = df[cond_col].apply(cond_auto_format)
-        changed = before != df[cond_col]
-        if changed.any():
-            df.loc[changed, "CORE_ChangeNotes"] += "Conductivity formatted per guide; "
+        cond = pd.to_numeric(df[cond_col], errors="coerce")
+        cond = cond.mask(cond < 0, np.nan)
+        mask_low = cond < 100
+        df.loc[mask_low, cond_col] = cond[mask_low].round(0)
 
-    # Post-Test Calibration ±20% → ENFORCE clear conductivity
-    if "Post-Test Calibration Conductivity" in df.columns and "Standard Value" in df.columns and cond_col:
-        post_cal = pd.to_numeric(df["Post-Test Calibration Conductivity"], errors="coerce")
-        std_val = pd.to_numeric(df["Standard Value"], errors="coerce")
-        valid_cal = (post_cal >= 0.8 * std_val) & (post_cal <= 1.2 * std_val)
-        bad = ~valid_cal
-        df.loc[bad, "CORE_Notes"] += "Post-Test Calibration outside ±20% of standard; "
-        df.loc[bad, cond_col] = np.nan
-        df.loc[bad, "CORE_ChangeNotes"] += "Conductivity cleared (calibration ±20% fail); "
+        def round_sig3(x):
+            if pd.isna(x) or x == 0:
+                return x
+            return float(f"{float(x):.3g}")
 
-    # Calibration time within 24h → ENFORCE clear related params
-    pre_time_cols  = [c for c in df.columns if ("pre" in c.lower() and "calibration" in c.lower() and "time" in c.lower())]
-    post_time_cols = [c for c in df.columns if ("post" in c.lower() and "calibration" in c.lower() and "time" in c.lower())]
-    if "Sample Date" in df.columns:
-        for idx, row in df.iterrows():
-            samp_dt = try_parse_datetime(row.get("Sample Date"), row.get("Sample Time Final Format"))
-            if samp_dt is None: continue
-            for c in pre_time_cols + post_time_cols:
-                pname = "conductivity" if "conductivity" in c.lower() else ("ph" if "ph" in c.lower() else ("dissolved oxygen" if ("dissolved" in c.lower() or "oxygen" in c.lower() or "do" in c.lower()) else None))
-                cal_dt = try_parse_datetime(row.get(c)) or try_parse_datetime(row.get("Sample Date"), row.get(c))
-                if cal_dt is not None and abs((samp_dt - cal_dt).total_seconds()) > 24*3600:
-                    df.at[idx, "CORE_Notes"] += f"Calibration time >24h from sample ({c}); "
-                    clear_param_by_name(idx, pname)
+        mask_high = cond >= 100
+        df.loc[mask_high, cond_col] = cond[mask_high].apply(round_sig3)
 
-    # pH & Temp rounding (format)
-    if "pH (standard units)" in df.columns:
-        df["pH Rounded"] = pd.to_numeric(df["pH (standard units)"], errors="coerce").round(1)
-        df["CORE_ChangeNotes"] += "Rounded pH to 0.1; "
-    if "Water Temperature (° C)" in df.columns:
-        df["Water Temp Rounded"] = pd.to_numeric(df["Water Temperature (° C)"], errors="coerce").round(1)
-        df["CORE_ChangeNotes"] += "Rounded Water Temp to 0.1; "
+    # --- TDS = Conductivity * 0.65 ---
+    if cond_col and tds_col:
+        cond = pd.to_numeric(df[cond_col], errors="coerce")
+        tds_calc = cond * 0.65
+        df["TDS_Calc (mg/L)"] = tds_calc.round(1)
+        tds = pd.to_numeric(df[tds_col], errors="coerce")
+        tds = tds.fillna(tds_calc)
+        df[tds_col] = tds.round(1)
 
-    # Salinity display
-    if "Salinity (ppt)" in df.columns:
-        def fmt_sal(val):
-            try:
-                if pd.isna(val): return val
-                v = float(val)
-                return "< 2.0" if v < 2.0 else round(v, 1)
-            except: return val
-        df["Salinity Formatted"] = df["Salinity (ppt)"].apply(fmt_sal)
-        df["CORE_ChangeNotes"] += "Formatted Salinity display; "
+    return df
 
-    # Numeric format notes
-    for col in ["Time Spent Sampling/Traveling", "Roundtrip Distance Traveled"]:
-        if col in df.columns:
-            mask = ~df[col].apply(lambda x: isinstance(x, (int, float, np.integer, np.floating)))
-            df.loc[mask, "CORE_Notes"] += f"{col} format not numeric; "
 
-    df_clean = df.drop(index=row_delete_indices)
-    return df_clean, df
+# -----------------------------------------------------------------------------
+# 5. E. COLI CLEANING
+# -----------------------------------------------------------------------------
 
-# -------------------- ECOLI --------------------
-def run_ecoli(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    df = df0.copy()
-    df["ECOLI_ValidationNotes"] = ""
-    df["ECOLI_ChangeNotes"] = ""
+def clean_ecoli(df):
+    df = df.copy()
 
-    def clear_ecoli(idx, prefixes=("Sample 1","Sample 2"), clear_avg=True):
-        for p in prefixes:
-            cfu = f"{p}: Colony Forming Units per 100mL"
-            if cfu in df.columns: df.at[idx, cfu] = np.nan
-        if clear_avg and "E. Coli Average" in df.columns:
-            df.at[idx, "E. Coli Average"] = np.nan
+    ecoli_avg_col = find_col(df, COLUMN_MAP["ecoli_avg"])
+    cfu1_col = find_col(df, COLUMN_MAP["ecoli_cfu1"])
+    cfu2_col = find_col(df, COLUMN_MAP["ecoli_cfu2"])
+    col1_col = find_col(df, COLUMN_MAP["ecoli_colonies1"])
+    col2_col = find_col(df, COLUMN_MAP["ecoli_colonies2"])
+    temp_col = find_col(df, COLUMN_MAP["ecoli_temp"])
+    hold_col = find_col(df, COLUMN_MAP["ecoli_hold"])
+    blank_qc_col = find_col(df, COLUMN_MAP["ecoli_blank_qc"])
+    optimal_col = find_col(df, COLUMN_MAP["ecoli_optimal_colony"])
 
-    all_zero_cols = [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col]) and (df[col].fillna(0) == 0).all()]
+    # Remove any reported 0 – should be <1
+    if ecoli_avg_col:
+        ecoli_avg = pd.to_numeric(df[ecoli_avg_col], errors="coerce")
+        ecoli_avg = ecoli_avg.mask(ecoli_avg == 0, np.nan)
+        ecoli_avg = ecoli_avg.round(0)
 
-    # Incubation Temperature 30–36°C → else clear E. coli
-    col_temp = "Incubation temperature is 33° C +/- 3° C"
-    bad_temp_idx = set()
-    if col_temp in df.columns and col_temp not in all_zero_cols:
-        df[col_temp] = pd.to_numeric(df[col_temp], errors="coerce")
-        mask = (df[col_temp] < 30) | (df[col_temp] > 36)
-        df.loc[mask, "ECOLI_ValidationNotes"] += "Incubation temperature not in 30–36°C; "
-        bad_temp_idx = set(df[mask].index.tolist())
-        for idx in bad_temp_idx: clear_ecoli(idx)
+        def round_sig2_int(x):
+            if pd.isna(x) or x == 0:
+                return x
+            return float(f"{float(x):.2g}")
 
-    # Incubation Time 28–31h → else clear
-    col_time = "Incubation time is between 28-31 hours"
-    bad_time_idx = set()
-    if col_time in df.columns and col_time not in all_zero_cols:
-        df[col_time] = pd.to_numeric(df[col_time], errors="coerce")
-        mask = (df[col_time] < 28) | (df[col_time] > 31)
-        df.loc[mask, "ECOLI_ValidationNotes"] += "Incubation time not in 28–31h; "
-        bad_time_idx = set(df[mask].index.tolist())
-        for idx in bad_time_idx: clear_ecoli(idx)
+        ecoli_avg = ecoli_avg.apply(round_sig2_int)
+        df[ecoli_avg_col] = ecoli_avg
 
-    # Colonies counted <200
-    for i, p in enumerate(["Sample 1","Sample 2"], start=1):
-        col_cnt = f"{p}: Colonies Counted"
-        if col_cnt in df.columns and col_cnt not in all_zero_cols:
-            mask = pd.to_numeric(df[col_cnt], errors="coerce") > 200
-            df.loc[mask, "ECOLI_ValidationNotes"] += f"{col_cnt} > 200 colonies; "
-            for idx in df[mask].index.tolist():
-                clear_ecoli(idx)  # clear both & avg (conservative)
+    for col in [cfu1_col, cfu2_col]:
+        if not col:
+            continue
+        cfu = pd.to_numeric(df[col], errors="coerce")
+        cfu = cfu.mask(cfu == 0, np.nan)
+        df[col] = cfu
 
-    # Field blank → must be no growth
-    col_blank = "No colony growth on Field Blank"
-    if col_blank in df.columns and col_blank not in all_zero_cols:
-        bad_blank = df[col_blank].astype(str).str.lower().isin(["no", "false", "n"])
-        df.loc[bad_blank, "ECOLI_ValidationNotes"] += "Colony growth detected in field blank; "
-        for idx in df[bad_blank].index.tolist():
-            clear_ecoli(idx)
+    # colonies counted < 200
+    for col in [col1_col, col2_col]:
+        if not col:
+            continue
+        colonies = pd.to_numeric(df[col], errors="coerce")
+        bad = colonies >= 200
+        df.loc[bad, col] = np.nan
+        if ecoli_avg_col:
+            df.loc[bad, ecoli_avg_col] = np.nan
 
-    # E. Coli average: remove zeros & rounding
-    col_ecoli = "E. Coli Average"
-    if col_ecoli in df.columns and col_ecoli not in all_zero_cols:
-        df[col_ecoli] = pd.to_numeric(df[col_ecoli], errors="coerce")
-        mask0 = df[col_ecoli] == 0
-        df.loc[mask0, "ECOLI_ValidationNotes"] += "E. coli = 0; "
-        df.loc[mask0, col_ecoli] = np.nan
+    # incubation temperature 30–36 °C
+    if temp_col:
+        temp = pd.to_numeric(df[temp_col], errors="coerce")
+        df["QC_Ecoli_Temp_30_36"] = (temp >= 30) & (temp <= 36)
 
-        def round_to_2sf_after_int(n):
-            if pd.isna(n): return n
-            try:
-                n_int = int(round(float(n)))
-                if n_int == 0: return 0
-                k = int(np.floor(np.log10(abs(n_int))))
-                return int(round(n_int, -k + 1))
-            except: return n
-        df["E. Coli Rounded (int→2SF)"] = df[col_ecoli].apply(round_to_2sf_after_int)
-        df["ECOLI_ChangeNotes"] += "Rounded E. coli: nearest int then to 2SF; "
+    # incubation period 28–31 hours (if hours)
+    if hold_col:
+        hold = pd.to_numeric(df[hold_col], errors="coerce")
+        df["QC_Ecoli_Hold_28_31h"] = (hold >= 28) & (hold <= 31)
 
-    # CFU formula validation
-    def cfu_match(row, prefix):
-        try:
-            count = row[f"{prefix}: Colonies Counted"]
-            dilution = row[f"{prefix}: Dilution Factor (Manual)"]
-            volume = row[f"{prefix}: Sample Size (mL)"]
-            reported = row[f"{prefix}: Colony Forming Units per 100mL"]
-            if any(pd.isna([count, dilution, volume, reported])): return True
-            calculated = (count * dilution * 100) / volume
-            return abs(calculated - reported) <= 10
-        except: return True
+    # field blank OK
+    if blank_qc_col:
+        blank = df[blank_qc_col].astype(str).str.strip().str.lower()
+        df["QC_Ecoli_Blank_OK"] = blank.isin(
+            ["yes", "true", "ok", "no growth", "none"]
+        )
 
-    for prefix in ["Sample 1","Sample 2"]:
-        cols = [f"{prefix}: Colonies Counted", f"{prefix}: Dilution Factor (Manual)",
-                f"{prefix}: Sample Size (mL)", f"{prefix}: Colony Forming Units per 100mL"]
-        if all(c in df.columns and c not in all_zero_cols for c in cols):
-            valid = df.apply(lambda row: cfu_match(row, prefix), axis=1)
-            bad = ~valid
-            df.loc[bad, "ECOLI_ValidationNotes"] += f"{prefix} CFU formula mismatch; "
-            for idx in df[bad].index.tolist():
-                clear_ecoli(idx, prefixes=(prefix,), clear_avg=True)
+    # optimal colony number flag
+    if optimal_col:
+        df["QC_Ecoli_OptimalColonyFlag"] = df[optimal_col]
 
-    df_clean = df[df["ECOLI_ValidationNotes"].str.strip() == ""]
-    return df_clean, df
+    return df
 
-# -------------------- ADVANCED --------------------
-def run_adv(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    df = df0.copy()
-    df["ADVANCED_ValidationNotes"] = ""
-    df["ADVANCED_ChangeNotes"] = ""
 
-    all_zero_cols = [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col]) and (df[col].fillna(0) == 0).all()]
-    for c in all_zero_cols:
-        df["ADVANCED_ChangeNotes"] += f"Skipped checks for unmeasured parameter: {c}; "
+# -----------------------------------------------------------------------------
+# 6. ADVANCED CLEANING
+# -----------------------------------------------------------------------------
 
-    def log_issue(idx, text): df.at[idx, "ADVANCED_ValidationNotes"] += text + "; "
+def clean_advanced(df):
+    df = df.copy()
+    turb_col = find_col(df, COLUMN_MAP["turbidity"])
+    discharge_col = find_col(df, COLUMN_MAP["discharge"])
 
-    # Label sanity notes
-    phosphate_cols = [c for c in df.columns if "phosphate" in c.lower() and "value" in c.lower() and c not in all_zero_cols]
-    nitrate_cols   = [c for c in df.columns if "nitrate-nitrogen" in c.lower() and "value" in c.lower() and c not in all_zero_cols]
-    turbidity_cols = [c for c in df.columns if "turbidity" in c.lower() and "result" in c.lower() and c not in all_zero_cols]
-    for c in phosphate_cols:
-        if ("mg/l" not in c.lower()) and ("ppm" not in c.lower()):
-            for idx in df.index: log_issue(idx, f"{c} not labeled in mg/L or ppm")
-    for c in nitrate_cols:
-        if ("mg/l" not in c.lower()) and ("ppm" not in c.lower()):
-            for idx in df.index: log_issue(idx, f"{c} not labeled in mg/L or ppm")
-    for c in turbidity_cols:
-        if ("ntu" not in c.lower()) and ("jtu" in c.lower()):
-            for idx in df.index: log_issue(idx, f"{c} appears to be in JTU not NTU")
+    # Turbidity: remove negative
+    if turb_col:
+        turb = pd.to_numeric(df[turb_col], errors="coerce")
+        turb = turb.mask(turb < 0, np.nan)
+        df[turb_col] = turb
 
-    # Record-level units → ENFORCE clear invalid unit values (if a value column exists)
-    unit_col = "ResultMeasure/MeasureUnitCode"; param_col = "CharacteristicName"; value_col = None
-    for cand in ["ResultMeasureValue","Result Value","Value","ResultValue"]:
-        if cand in df.columns: value_col = cand; break
+    # Discharge rules
+    if discharge_col:
+        q = pd.to_numeric(df[discharge_col], errors="coerce")
+        q = q.mask(q < 0, np.nan)
+        mask_low = q < 10
+        df.loc[mask_low, discharge_col] = q[mask_low].round(1)
+        mask_high = q >= 10
+        df.loc[mask_high, discharge_col] = q[mask_high].round(0)
 
-    if unit_col in df.columns and param_col in df.columns and value_col:
-        for idx in df.index:
-            p = str(df.at[idx, param_col]).lower(); u = str(df.at[idx, unit_col]).lower()
-            bad = False
-            if "phosphate" in p and u not in ["mg/l","ppm"]: bad = True
-            elif "nitrate" in p and u not in ["mg/l","ppm"]: bad = True
-            elif "turbidity" in p and u != "ntu": bad = True
-            elif "streamflow" in p and u != "ft2/sec": bad = True
-            elif "discharge"  in p and u != "ft2/sec": bad = True
-            if bad:
-                log_issue(idx, f"{p} unit invalid: {u}; value cleared")
-                try: df.at[idx, value_col] = np.nan
-                except: pass
+    return df
 
-    # Discharge formatting (correct values)
-    col_discharge = "Discharge Recorded"
-    if col_discharge in df.columns and col_discharge not in all_zero_cols:
-        def fix_discharge(val):
-            try:
-                v = float(val)
-                if v < 10: new_v = round(v, 1); return new_v, None if abs(v - new_v) < 0.05 else f"{v} → {new_v} (1 dec)"
-                else:      new_v = round(v);    return new_v, None if float(v).is_integer() else f"{v} → {new_v} (int)"
-            except: return val, "Invalid or non-numeric discharge value"
-        for idx in df.index:
-            val = df.at[idx, col_discharge]; fixed, issue = fix_discharge(val)
-            if issue: log_issue(idx, f"Discharge format issue: {issue}")
-            if (fixed is not None) and (fixed != val):
-                df.at[idx, col_discharge] = fixed
-                df.at[idx, "ADVANCED_ChangeNotes"] += f"Discharge corrected {val} → {fixed}; "
 
-    df_clean = df[df["ADVANCED_ValidationNotes"].str.strip() == ""]
-    return df_clean, df
+# -----------------------------------------------------------------------------
+# 7. RIPARIAN CLEANING / QC
+# -----------------------------------------------------------------------------
 
-# -------------------- RIPARIAN --------------------
-def run_rip(df0: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    df = df0.copy()
-    df["RIPARIAN_ValidationNotes"] = ""
-    df["RIPARIAN_ChangeNotes"] = ""
+def clean_riparian(df):
+    df = df.copy()
+    bank_col = find_col(df, COLUMN_MAP["bank_evaluated"])
+    img_col = find_col(df, COLUMN_MAP["riparian_image"])
 
-    def log_change(idx, msg): df.at[idx, "RIPARIAN_ChangeNotes"] += msg + "; "
-    def log_issue(idx, msg):  df.at[idx, "RIPARIAN_ValidationNotes"] += msg + "; "
+    if bank_col:
+        bank = df[bank_col].astype(str).str.strip().str.lower()
+        df["QC_Riparian_BankCompleted"] = bank.isin(
+            ["yes", "completed", "done", "true"]
+        )
 
-    indicator_cols = [
-        "Energy Dissipation","New Plant Colonization","Stabilizing Vegetation",
-        "Age Diversity","Species Diversity","Plant Vigor","Water Storage",
-        "Bank/Channel Erosion","Sediment Deposition"
+    if img_col:
+        img = df[img_col].astype(str).str.strip().str.lower()
+        df["QC_Riparian_ImageSubmitted"] = img.isin(
+            ["yes", "submitted", "true"]
+        )
+
+    return df
+
+
+# -----------------------------------------------------------------------------
+# 8. DSR QUANTITY CHECKS
+# -----------------------------------------------------------------------------
+
+def dsr_quantity_summary(df, category_cols):
+    site_col = find_col(df, COLUMN_MAP["site"])
+    watershed_col = find_col(df, COLUMN_MAP["watershed"])
+    param_cols = category_cols[:]
+
+    summary = {}
+
+    # 1) watershed -> # sites
+    if site_col and watershed_col:
+        ws_counts = (
+            df.groupby(watershed_col)[site_col]
+            .nunique()
+            .reset_index(name="n_sites")
+        )
+    elif site_col:
+        ws_counts = pd.DataFrame(
+            {
+                "Watershed": ["(file_total)"],
+                "n_sites": [df[site_col].nunique()],
+            }
+        )
+    else:
+        ws_counts = pd.DataFrame(columns=["Watershed", "n_sites"])
+
+    summary["watershed_site_counts"] = ws_counts
+
+    # 2) #events per site per parameter
+    if site_col and param_cols:
+        records = []
+        for p in param_cols:
+            if p not in df.columns:
+                continue
+            counts = (
+                df.groupby(site_col)[p]
+                .apply(lambda x: x.notna().sum())
+                .reset_index(name="n_events")
+            )
+            counts["parameter"] = p
+            records.append(counts)
+        if records:
+            param_counts = pd.concat(records, ignore_index=True)
+        else:
+            param_counts = pd.DataFrame(
+                columns=[site_col, "n_events", "parameter"]
+            )
+    else:
+        param_counts = pd.DataFrame(
+            columns=[site_col if site_col else "Site", "n_events", "parameter"]
+        )
+
+    summary["site_param_counts"] = param_counts
+    return summary
+
+
+def filter_dsr_ready(df, category_cols):
+    df = df.copy()
+    site_col = find_col(df, COLUMN_MAP["site"])
+    watershed_col = find_col(df, COLUMN_MAP["watershed"])
+
+    if not site_col:
+        return df
+
+    summary = dsr_quantity_summary(df, category_cols)
+    param_counts = summary["site_param_counts"]
+    if param_counts.empty:
+        return df
+
+    good_pairs = param_counts[param_counts["n_events"] >= 10][[site_col, "parameter"]]
+
+    keep_mask = pd.Series(False, index=df.index)
+    for _, row in good_pairs.iterrows():
+        s = row[site_col]
+        p = row["parameter"]
+        if p not in df.columns:
+            continue
+        mask = (df[site_col] == s) & df[p].notna()
+        keep_mask = keep_mask | mask
+
+    df_filtered = df[keep_mask].copy()
+
+    if watershed_col:
+        ws_counts = (
+            df_filtered.groupby(watershed_col)[site_col]
+            .nunique()
+            .reset_index(name="n_sites")
+        )
+        good_ws = ws_counts[ws_counts["n_sites"] >= 3][watershed_col]
+        df_filtered = df_filtered[df_filtered[watershed_col].isin(good_ws)]
+
+    return df_filtered.reset_index(drop=True)
+
+
+# -----------------------------------------------------------------------------
+# 9. OUTLIER CLEANER (IQR)
+# -----------------------------------------------------------------------------
+
+def iqr_outlier_cleaner(df, cols, k=1.5):
+    """
+    Remove outliers using IQR rule for selected columns.
+    Returns filtered_df, mask_removed
+    """
+    df = df.copy()
+    mask_keep = pd.Series(True, index=df.index)
+
+    for c in cols:
+        if c not in df.columns:
+            continue
+        x = pd.to_numeric(df[c], errors="coerce")
+        q1 = x.quantile(0.25)
+        q3 = x.quantile(0.75)
+        iqr = q3 - q1
+        if pd.isna(iqr) or iqr == 0:
+            continue
+        lower = q1 - k * iqr
+        upper = q3 + k * iqr
+        mask_keep &= ((x >= lower) & (x <= upper)) | x.isna()
+
+    filtered_df = df[mask_keep].copy()
+    mask_removed = ~mask_keep
+    return filtered_df, mask_removed
+
+
+# -----------------------------------------------------------------------------
+# 10. Helper: compute all cleaned dfs once
+# -----------------------------------------------------------------------------
+
+def get_clean_dfs(raw_df):
+    """Run through full cleaning pipeline & categorization."""
+    cats = categorize_columns(raw_df)
+    gen_df = general_cleaning(raw_df)
+    core_df = clean_core(gen_df)
+    ecoli_df = clean_ecoli(core_df)
+    adv_df = clean_advanced(ecoli_df)
+    rip_df = clean_riparian(adv_df)
+    all_param_cols = cats["core"] + cats["ecoli"] + cats["advanced"]
+    return {
+        "categories": cats,
+        "general_df": gen_df,
+        "clean_df": rip_df,
+        "all_param_cols": all_param_cols,
+    }
+
+
+# -----------------------------------------------------------------------------
+# 11. UI – TABS
+# -----------------------------------------------------------------------------
+
+tabs = st.tabs(
+    [
+        "Upload File",
+        "GENERAL Validation",
+        "CORE Validation",
+        "ECOLI Validation",
+        "ADVANCED Validation",
+        "RIPARIAN Validation",
+        "Run All & Exports",
+        "Outlier Cleaner (IQR)",
+        "Cleaning Guide",
     ]
-    available_cols = [c for c in indicator_cols if c in df.columns]
+)
 
-    zeroed_columns = []
-    for c in available_cols:
-        numeric_col = pd.to_numeric(df[c], errors="coerce").fillna(0)
-        if numeric_col.eq(0).all(): zeroed_columns.append(c)
-    for c in zeroed_columns:
-        df["RIPARIAN_ChangeNotes"] += f"Skipped checks for unmeasured parameter: {c}; "
-
-    if "Bank Evaluated" in df.columns:
-        for idx, val in df["Bank Evaluated"].items():
-            if pd.isna(val) or str(val).strip() == "":
-                log_issue(idx, "Bank evaluation missing")
-
-    for idx, row in df.iterrows():
-        missing_count = 0
-        for c in available_cols:
-            if c in zeroed_columns: continue
-            val = row.get(c)
-            if pd.isna(val) or str(val).strip() == "":
-                comments = str(row.get("Comments", "")).strip().lower()
-                if comments in ["", "n/a", "na", "none"]:
-                    log_issue(idx, f"{c} missing without explanation")
-                else:
-                    df.at[idx, c] = np.nan
-                missing_count += 1
-        if missing_count > 0:
-            comments = str(row.get("Comments", "")).strip().lower()
-            if comments in ["", "n/a", "na", "none"]:
-                log_issue(idx, f"Riparian indicators incomplete: {missing_count} missing")
-
-    image_col = "Image of site was submitted"
-    if image_col in df.columns:
-        for idx, val in df[image_col].items():
-            raw = str(val).strip().lower()
-            if raw in ["no","false","n","","nan"]:
-                log_issue(idx, "Site image not submitted")
-            elif raw in ["yes","true","y"]:
-                if str(val).strip() != "Yes":
-                    log_change(idx, f"Image value standardized: '{val}' → 'Yes'")
-                    df.at[idx, image_col] = "Yes"
-
-    df_clean = df[df["RIPARIAN_ValidationNotes"].str.strip() == ""]
-    return df_clean, df
-
-# ==== Tabs ====
-tabs = st.tabs([
-    " Upload File",
-    " GENERAL Validation",
-    " CORE Validation",
-    " ECOLI Validation",
-    " ADVANCED Validation",
-    " RIPARIAN Validation",
-    " Run All & Exports",
-    " Outlier Cleaner (IQR)",
-    "Cleaning Guide",
-])
-
-# ------------------------ Upload ------------------------
+# --- Tab 1: Upload File ------------------------------------------------------
 with tabs[0]:
-    st.header(" Upload Your Excel File (once)")
-    uploaded = st.file_uploader("Upload a .xlsx file", type=["xlsx"])
-    if uploaded:
-        st.session_state.input_basename = os.path.basename(uploaded.name)
-        bytes_data = uploaded.read()
-        df0 = pd.read_excel(io.BytesIO(bytes_data), engine="openpyxl")
-        st.session_state.df_original = df0.copy()
-        mark_success("File loaded. You can proceed to the next tabs or use 'Run All'.")
-        st.write("Rows:", len(df0), " | Columns:", len(df0.columns))
-        with st.expander("Preview first 20 rows"):
-            st.dataframe(df0.head(20))
+    st.subheader("Upload File")
+    uploaded_file = st.file_uploader("یک فایل CSV بارگذاری کن", type=["csv"])
 
-# ------------------------ GENERAL ------------------------
+    if uploaded_file is not None:
+        raw_bytes = uploaded_file.read()
+        raw_df = pd.read_csv(io.BytesIO(raw_bytes))
+        st.session_state["raw_df"] = raw_df
+        st.success(
+            f"فایل با {raw_df.shape[0]} ردیف و {raw_df.shape[1]} ستون خوانده شد."
+        )
+        st.dataframe(raw_df.head(30))
+    else:
+        st.info("لطفاً فایل را اینجا آپلود کن. سپس به تب‌های بعدی برو.")
+
+# اگر هنوز فایل نداریم، تب‌های بعدی فقط پیام بدهند
+has_data = "raw_df" in st.session_state
+
+# اگر داده هست، یک بار همه تمیزکاری را حساب کن
+clean_context = None
+if has_data:
+    clean_context = get_clean_dfs(st.session_state["raw_df"])
+    categories = clean_context["categories"]
+    general_df = clean_context["general_df"]
+    clean_df = clean_context["clean_df"]
+    all_param_cols = clean_context["all_param_cols"]
+
+# --- Tab 2: GENERAL Validation ----------------------------------------------
 with tabs[1]:
-    st.header(" GENERAL Validation")
-    if not isinstance(st.session_state.df_original, pd.DataFrame):
-        st.info("Upload a file in the first tab to enable this step.")
-    else:
-        if st.button("Run GENERAL Validation"):
-            g_clean, g_annot = run_general(st.session_state.df_original)
-            base = st.session_state.input_basename or "input.xlsx"
-            p_clean = path_with_suffix(base, "cleaned_GENERAL")
-            p_annot = path_with_suffix(base, "annotated_GENERAL")
-            save_excel(g_clean, p_clean); save_excel(g_annot, p_annot)
-            st.session_state.df_general_clean = g_clean; st.session_state.df_general_annot = g_annot
-            mark_success("GENERAL validation complete.")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.download_button("📥 Download cleaned_GENERAL.xlsx", data=open(p_clean, "rb").read(), file_name="cleaned_GENERAL.xlsx")
-            with c2:
-                st.download_button("📥 Download annotated_GENERAL.xlsx", data=open(p_annot, "rb").read(), file_name="annotated_GENERAL.xlsx")
+    st.subheader("GENERAL Validation")
 
-# ------------------------ CORE ------------------------
+    if not has_data:
+        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
+    else:
+        st.markdown("### نمونه‌ای از GENERAL cleaning")
+        st.write("داده‌ی خام (اولین ۲۰ ردیف):")
+        st.dataframe(st.session_state["raw_df"].head(20))
+
+        st.write("داده‌ی پس از GENERAL cleaning (اولین ۲۰ ردیف):")
+        st.dataframe(general_df.head(20))
+
+        st.markdown("### فلگ‌های GENERAL QC")
+        qc_cols = [c for c in general_df.columns if c.startswith("QC_")]
+        if qc_cols:
+            st.write("ستون‌های QC در این مرحله:")
+            st.write(qc_cols)
+            st.dataframe(general_df[qc_cols].head(30))
+        else:
+            st.info("فلگ QC عمومی در این فایل ایجاد نشده است.")
+
+# --- Tab 3: CORE Validation --------------------------------------------------
 with tabs[2]:
-    st.header(" CORE Validation")
-    src_core = first_available("df_general_clean")
-    if src_core is None:
-        st.info("Run GENERAL first (or use Run All).")
-    else:
-        if st.button("Run CORE Validation"):
-            c_clean, c_annot = run_core(src_core)
-            base = st.session_state.input_basename or "input.xlsx"
-            p_clean = path_with_suffix(base, "cleaned_CORE")
-            p_annot = path_with_suffix(base, "annotated_CORE")
-            save_excel(c_clean, p_clean); save_excel(c_annot, p_annot)
-            st.session_state.df_core_clean = c_clean; st.session_state.df_core_annot = c_annot
-            mark_success("CORE validation files generated.")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.download_button(" Download cleaned_CORE.xlsx", data=open(p_clean, "rb").read(), file_name="cleaned_CORE.xlsx")
-            with c2:
-                st.download_button(" Download annotated_CORE.xlsx", data=open(p_annot, "rb").read(), file_name="annotated_CORE.xlsx")
+    st.subheader("CORE Validation")
 
-# ------------------------ ECOLI ------------------------
+    if not has_data:
+        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
+    else:
+        core_cols = categories["core"]
+        if core_cols:
+            st.write("ستون‌های CORE شناسایی‌شده:")
+            st.write(core_cols)
+            st.dataframe(clean_df[core_cols + [c for c in clean_df.columns
+                         if c.startswith("QC_") and "Ecoli" not in c and "Riparian" not in c]].head(50))
+        else:
+            st.warning("هیچ ستون CORE بر اساس COLUMN_MAP پیدا نشد.")
+
+# --- Tab 4: ECOLI Validation -------------------------------------------------
 with tabs[3]:
-    st.header(" ECOLI Validation")
-    src_ecoli = first_available("df_general_clean")
-    if src_ecoli is None:
-        st.info("Run GENERAL first (or use Run All).")
-    else:
-        if st.button("Run ECOLI Validation"):
-            e_clean, e_annot = run_ecoli(src_ecoli)
-            base = st.session_state.input_basename or "input.xlsx"
-            p_clean = path_with_suffix(base, "cleaned_ECOLI")
-            p_annot = path_with_suffix(base, "annotated_ECOLI")
-            save_excel(e_clean, p_clean); save_excel(e_annot, p_annot)
-            st.session_state.df_ecoli_clean = e_clean; st.session_state.df_ecoli_annot = e_annot
-            mark_success("ECOLI validation files generated.")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.download_button(" Download cleaned_ECOLI.xlsx", data=open(p_clean, "rb").read(), file_name="cleaned_ECOLI.xlsx")
-            with c2:
-                st.download_button(" Download annotated_ECOLI.xlsx", data=open(p_annot, "rb").read(), file_name="annotated_ECOLI.xlsx")
+    st.subheader("ECOLI Validation")
 
-# ------------------------ ADVANCED ------------------------
+    if not has_data:
+        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
+    else:
+        ecoli_cols = categories["ecoli"]
+        if ecoli_cols:
+            st.write("ستون‌های ECOLI شناسایی‌شده:")
+            st.write(ecoli_cols)
+            view_cols = ecoli_cols + [
+                c for c in clean_df.columns
+                if c.startswith("QC_Ecoli")
+            ]
+            st.dataframe(clean_df[view_cols].head(50))
+        else:
+            st.warning("هیچ ستون ECOLI بر اساس COLUMN_MAP پیدا نشد.")
+
+# --- Tab 5: ADVANCED Validation ---------------------------------------------
 with tabs[4]:
-    st.header(" ADVANCED Validation")
-    src_adv = first_available("df_ecoli_clean", "df_general_clean", require_nonempty=False)
-    if src_adv is None:
-        st.info("Run GENERAL (and optionally ECOLI) first, or use Run All.")
-    else:
-        if st.button("Run ADVANCED Validation"):
-            a_clean, a_annot = run_adv(src_adv)
-            base = st.session_state.input_basename or "input.xlsx"
-            p_clean = path_with_suffix(base, "cleaned_ADVANCED")
-            p_annot = path_with_suffix(base, "annotated_ADVANCED")
-            save_excel(a_clean, p_clean); save_excel(a_annot, p_annot)
-            st.session_state.df_adv_clean = a_clean; st.session_state.df_adv_annot = a_annot
-            mark_success("ADVANCED validation files generated.")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.download_button("Download cleaned_ADVANCED.xlsx", data=open(p_clean, "rb").read(), file_name="cleaned_ADVANCED.xlsx")
-            with c2:
-                st.download_button("Download annotated_ADVANCED.xlsx", data=open(p_annot, "rb").read(), file_name="annotated_ADVANCED.xlsx")
+    st.subheader("ADVANCED Validation")
 
-# ------------------------ RIPARIAN ------------------------
+    if not has_data:
+        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
+    else:
+        adv_cols = categories["advanced"]
+        if adv_cols:
+            st.write("ستون‌های ADVANCED شناسایی‌شده:")
+            st.write(adv_cols)
+            st.dataframe(clean_df[adv_cols].head(50))
+        else:
+            st.warning("هیچ ستون ADVANCED بر اساس COLUMN_MAP پیدا نشد.")
+
+# --- Tab 6: RIPARIAN Validation ---------------------------------------------
 with tabs[5]:
-    st.header(" RIPARIAN Validation")
-    src_rip = first_available("df_adv_clean", "df_general_clean", require_nonempty=False)
-    if src_rip is None:
-        st.info("Run prior steps (or use Run All).")
-    else:
-        if st.button("Run RIPARIAN Validation"):
-            r_clean, r_annot = run_rip(src_rip)
-            base = st.session_state.input_basename or "input.xlsx"
-            p_clean = path_with_suffix(base, "cleaned_RIPARIAN")
-            p_annot = path_with_suffix(base, "annotated_RIPARIAN")
-            save_excel(r_clean, p_clean); save_excel(r_annot, p_annot)
-            st.session_state.df_rip_clean = r_clean; st.session_state.df_rip_annot = r_annot
-            mark_success("RIPARIAN validation files generated.")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.download_button(" Download cleaned_RIPARIAN.xlsx", data=open(p_clean, "rb").read(), file_name="cleaned_RIPARIAN.xlsx")
-            with c2:
-                st.download_button(" Download annotated_RIPARIAN.xlsx", data=open(p_annot, "rb").read(), file_name="annotated_RIPARIAN.xlsx")
+    st.subheader("RIPARIAN Validation")
 
-# ------------------------ RUN ALL & EXPORTS ------------------------
+    if not has_data:
+        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
+    else:
+        rip_cols = categories["riparian"]
+        if rip_cols:
+            st.write("ستون‌های RIPARIAN شناسایی‌شده:")
+            st.write(rip_cols)
+            view_cols = rip_cols + [
+                c for c in clean_df.columns
+                if c.startswith("QC_Riparian")
+            ]
+            st.dataframe(clean_df[view_cols].head(50))
+        else:
+            st.warning("هیچ ستون RIPARIAN بر اساس COLUMN_MAP پیدا نشد.")
+
+# --- Tab 7: Run All & Exports -----------------------------------------------
 with tabs[6]:
-    st.header(" Run All (GENERAL → CORE → ECOLI → ADVANCED → RIPARIAN)")
-    st.caption("Final_Combined ")
+    st.subheader("Run All & Exports")
 
-    if not isinstance(st.session_state.df_original, pd.DataFrame):
-        st.info("Upload a file in the first tab.")
+    if not has_data:
+        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
     else:
-        if st.button("Run All Steps"):
-            base = st.session_state.input_basename or "input.xlsx"
+        st.markdown("### خلاصه‌ی DSR (کمیت داده‌ها)")
+        summary = dsr_quantity_summary(clean_df, all_param_cols)
 
-            # GENERAL
-            g_clean, g_annot = run_general(st.session_state.df_original)
-            st.session_state.df_general_clean, st.session_state.df_general_annot = g_clean, g_annot
-            p_g_clean = path_with_suffix(base, "cleaned_GENERAL"); p_g_annot = path_with_suffix(base, "annotated_GENERAL")
-            save_excel(g_clean, p_g_clean); save_excel(g_annot, p_g_annot)
+        st.markdown("**تعداد سایت‌ها در هر حوضه**")
+        st.dataframe(summary["watershed_site_counts"])
 
-            # CORE
-            c_clean, c_annot = run_core(g_clean)
-            st.session_state.df_core_clean, st.session_state.df_core_annot = c_clean, c_annot
-            p_c_clean = path_with_suffix(base, "cleaned_CORE"); p_c_annot = path_with_suffix(base, "annotated_CORE")
-            save_excel(c_clean, p_c_clean); save_excel(c_annot, p_c_annot)
+        st.markdown("**تعداد رویداد برای هر پارامتر در هر سایت**")
+        st.dataframe(summary["site_param_counts"])
 
-            # ECOLI
-            e_clean, e_annot = run_ecoli(g_clean)
-            st.session_state.df_ecoli_clean, st.session_state.df_ecoli_annot = e_clean, e_annot
-            p_e_clean = path_with_suffix(base, "cleaned_ECOLI"); p_e_annot = path_with_suffix(base, "annotated_ECOLI")
-            save_excel(e_clean, p_e_clean); save_excel(e_annot, p_e_annot)
+        apply_dsr_filter = st.checkbox(
+            "اعمال فیلتر DSR (≥3 سایت در هر حوضه و ≥10 رویداد برای هر پارامتر/سایت)",
+            value=False
+        )
 
-            # ADVANCED (prefer ECOLI-clean if any)
-            a_source = e_clean if not e_clean.empty else g_clean
-            a_clean, a_annot = run_adv(a_source)
-            st.session_state.df_adv_clean, st.session_state.df_adv_annot = a_clean, a_annot
-            p_a_clean = path_with_suffix(base, "cleaned_ADVANCED"); p_a_annot = path_with_suffix(base, "annotated_ADVANCED")
-            save_excel(a_clean, p_a_clean); save_excel(a_annot, p_a_annot)
+        if apply_dsr_filter:
+            dsr_ready_df = filter_dsr_ready(clean_df, all_param_cols)
+            st.success(
+                f"تعداد ردیف‌های DSR-ready: {dsr_ready_df.shape[0]} "
+                f"(از مجموع {clean_df.shape[0]} ردیف تمیزشده)"
+            )
+        else:
+            dsr_ready_df = clean_df.copy()
+            st.info("فیلتر DSR غیرفعال است. تمام داده‌های تمیزشده در نظر گرفته می‌شود.")
 
-            # RIPARIAN (prefer ADVANCED-clean if any)
-            r_source = a_clean if not a_clean.empty else g_clean
-            r_clean, r_annot = run_rip(r_source)
-            st.session_state.df_rip_clean, st.session_state.df_rip_annot = r_clean, r_annot
-            p_r_clean = path_with_suffix(base, "cleaned_RIPARIAN"); p_r_annot = path_with_suffix(base, "annotated_RIPARIAN")
-            save_excel(r_clean, p_r_clean); save_excel(r_annot, p_r_annot)
+        st.markdown("### پیش‌نمایش داده‌ی تمیزشده‌ی نهایی")
+        st.dataframe(clean_df.head(50))
 
-            # Final_Combined (notes merged)
-            final_base = r_clean if not r_clean.empty else (a_clean if not a_clean.empty else g_clean)
-            df_final = build_final_combined(final_base, g_annot, c_annot, e_annot, a_annot, r_annot)
-            p_final = path_with_suffix(base, "Final_Combined"); save_excel(df_final, p_final)
-            st.session_state.df_final_combined = df_final.copy(); st.session_state.p_final_combined = p_final
+        st.markdown("### دانلود خروجی‌ها")
+        # 1) cleaned_data
+        buf_clean = io.BytesIO()
+        clean_df.to_csv(buf_clean, index=False)
+        st.download_button(
+            label="دانلود Cleaned CSV",
+            data=buf_clean.getvalue(),
+            file_name="cleaned_data.csv",
+            mime="text/csv",
+            key="download_clean"
+        )
 
-            # Cleaned_AllSteps («داده‌های تمیز.xlsx»)
-            df_clean_all = (r_clean if not r_clean.empty else (a_clean if not a_clean.empty else (e_clean if not e_clean.empty else (c_clean if not c_clean.empty else g_clean))))
-            p_clean_all = path_with_suffix(base, "Cleaned_AllSteps"); save_excel(df_clean_all, p_clean_all)
-            st.session_state.df_clean_all = df_clean_all.copy(); st.session_state.p_clean_all = p_clean_all
+        # 2) DSR-ready
+        buf_dsr = io.BytesIO()
+        dsr_ready_df.to_csv(buf_dsr, index=False)
+        st.download_button(
+            label="دانلود DSR-ready CSV",
+            data=buf_dsr.getvalue(),
+            file_name="cleaned_data_DSR_ready.csv",
+            mime="text/csv",
+            key="download_dsr"
+        )
 
-            st.success(" All steps completed. Final_Combined + داده‌های تمیز آماده است.")
-
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.download_button(" Download Final_Combined.xlsx", data=open(p_final, "rb").read(), file_name="Final_Combined.xlsx")
-            with c2:
-                st.download_button(" دانلود «داده‌های تمیز.xlsx»", data=open(p_clean_all, "rb").read(), file_name="داده‌های تمیز.xlsx")
-            with c3:
-                mem_zip = io.BytesIO()
-                with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-                    for path in [p_g_clean, p_g_annot, p_c_clean, p_c_annot, p_e_clean, p_e_annot, p_a_clean, p_a_annot, p_r_clean, p_r_annot, p_final, p_clean_all]:
-                        if os.path.exists(path): zf.write(path, arcname=os.path.basename(path))
-                mem_zip.seek(0)
-                st.download_button(" Download ALL outputs (ZIP incl. Final_Combined & Cleaned_AllSteps)", data=mem_zip.getvalue(), file_name=f"Validation_Outputs_{datetime.now().strftime('%Y%m%d_%H%M')}.zip", mime="application/zip")
-
-# ------------------------ IQR ------------------------
+# --- Tab 8: Outlier Cleaner (IQR) -------------------------------------------
 with tabs[7]:
-    st.header(" Outlier Cleaner (IQR)")
-    st.caption("Set per-column outliers to NaN using IQR bounds (does not drop rows; metadata stays intact).")
-    src = first_available("df_final_combined", "df_adv_clean", "df_ecoli_clean", "df_general_clean", "df_original")
-    if src is None:
-        st.info("Upload a file in the first tab or run earlier steps.")
-    else:
-        st.write(f"**Source dataframe:** {len(src)} rows × {len(src.columns)} columns")
-        auto_cols = detect_quality_numeric_columns(src)
-        with st.expander("Select columns & options", expanded=True):
-            incl = st.multiselect("Water-quality numeric columns to clean (IQR):", options=auto_cols, default=auto_cols)
-            k = st.slider("IQR Multiplier (k)", min_value=1.0, max_value=3.0, value=1.5, step=0.1)
-        if st.button("Run IQR Clean"):
-            if not incl: st.warning("Please select at least one numeric column.")
-            else:
-                cleaned, report = iqr_clean(src, incl, k=k)
-                base = st.session_state.input_basename or "input.xlsx"
-                p_clean = path_with_suffix(base, f"IQR_NoOutliers_k{str(k).replace('.','_')}"); p_report = os.path.join(tmp_dir(), f"IQR_Report_k{str(k).replace('.','_')}.csv")
-                save_excel(cleaned, p_clean); report.to_csv(p_report, index=False)
-                st.success(" IQR cleaning done. Downloads below:")
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.download_button("Download IQR-cleaned Excel", data=open(p_clean, "rb").read(), file_name=os.path.basename(p_clean))
-                with c2:
-                    st.download_button("Download IQR bounds/report (CSV)", data=open(p_report, "rb").read(), file_name=os.path.basename(p_report), mime="text/csv")
-                with st.expander("Preview (first 20 rows)"): st.dataframe(cleaned.head(20))
-                with st.expander("Report preview"): st.dataframe(report)
+    st.subheader("Outlier Cleaner (IQR)")
 
-# ------------------------ Guide ------------------------
-with tabs[8]:
-    st.header(" Download Data Cleaning Guide")
-    st.markdown("Download the official data cleaning and validation guide.")
-    guide_filename_on_disk = "Validation_Rules_for_Parameters.pdf"
-    if os.path.exists(guide_filename_on_disk):
-        with open(guide_filename_on_disk, "rb") as f:
-            st.download_button(label="📄 Download Validation Guide (PDF)", data=f.read(), file_name="Validation_Rules_for_Parameters.pdf", mime="application/pdf")
+    if not has_data:
+        st.warning("اول در تب «Upload File» یک CSV آپلود کن.")
     else:
-        st.info("Place 'Validation_Rules_for_Parameters.pdf' next to the app to enable this download.")
+        st.write(
+            "در این بخش می‌توانی روی داده‌ی تمیزشده‌ی نهایی، "
+            "بر اساس قانون IQR، نقاط پرت را برای چند ستون عددی حذف کنی."
+        )
+
+        numeric_cols = clean_df.select_dtypes(include=[np.number]).columns.tolist()
+        if not numeric_cols:
+            st.info("هیچ ستون عددی برای IQR یافت نشد.")
+        else:
+            selected_cols = st.multiselect(
+                "ستون‌های عددی برای Outlier Cleaning (IQR):",
+                numeric_cols,
+                default=[]
+            )
+            k = st.slider(
+                "ضریب IQR (معمولاً 1.5):",
+                min_value=0.5,
+                max_value=3.0,
+                value=1.5,
+                step=0.1
+            )
+
+            if selected_cols:
+                filtered_df, mask_removed = iqr_outlier_cleaner(
+                    clean_df, selected_cols, k=k
+                )
+                n_removed = mask_removed.sum()
+                st.write(
+                    f"تعداد ردیف حذف‌شده به‌عنوان outlier: {n_removed} "
+                    f"(از {clean_df.shape[0]} ردیف)"
+                )
+                st.dataframe(filtered_df.head(50))
+
+                buf_iqr = io.BytesIO()
+                filtered_df.to_csv(buf_iqr, index=False)
+                st.download_button(
+                    label="دانلود CSV بدون Outlier (IQR)",
+                    data=buf_iqr.getvalue(),
+                    file_name="cleaned_data_IQR_filtered.csv",
+                    mime="text/csv",
+                    key="download_iqr"
+                )
+            else:
+                st.info("ستونی را برای پاک‌سازی Outlier انتخاب کن.")
+
+# --- Tab 9: Cleaning Guide ---------------------------------------------------
+with tabs[8]:
+    st.subheader("Cleaning Guide")
+
+    st.markdown(
+        """
+این تب خلاصه‌ای از راهنمای تمیزکاری است که بر اساس آن این اپ طراحی شده:
+
+### GENERAL
+- Remove data points that fall outside parameter/equipment ranges  
+- Remove repeat entries or duplicates  
+- Remove flagged data points  
+- Ensure a minimum of 3 sites per watershed  
+- Ensure a minimum of 10 viable monitoring events per parameter type, per site  
+- Remove extreme outliers (مثلاً اگر pH معمولاً 7.0 است و مقدار 1.3 گزارش شده)  
+- Ensure sampling was conducted at approximately the same time of day  
+- Any discrepancies in data are noted or explained in the “Comments” section  
+- None of the reagents used for testing are expired (این مورد بر اساس فرم است، نه CSV)  
+- After data has been cleaned, replace the data entries of “valid” and “invalid” as blank  
+- Once data has been cleaned, sort the data based on Site ID and date
+
+### CORE
+- Sample Depth = 0.3 m یا نصف Total Depth  
+- Total Depth = 0 مگر اینکه Flow Severity بیانگر «بدون آب» باشد  
+- Dissolved Oxygen: دو تیتراسیون، اختلاف ≤ 0.5 mg/L، گزارش به یک رقم اعشار  
+- Secchi Transparency: متوسط درست، دو رقم معنی‌دار، و از عمق کل بیشتر نباشد  
+- Transparency Tube: دو رقم معنی‌دار، حداکثر گزارش >1.2m  
+- Calibration: pre و post، حداکثر 24 ساعت اختلاف با Sampling Time  
+- Conductivity:  
+  - کمتر از 100 µS/cm → عدد صحیح  
+  - بالاتر از 100 µS/cm → سه رقم معنی‌دار  
+- TDS = Conductivity × 0.65  
+- دماها به یک رقم اعشار، pH به یک رقم اعشار
+
+### E. COLI
+- Incubation Temperature بین 30–36°C  
+- Incubation Period بین 28–31 ساعت  
+- Dilution factor calculation صحیح  
+- Colonies counted < 200 per plate  
+- Field blank بدون رشد کلونی  
+- مقدار 0 برای E. coli باید به صورت <1 گزارش شود (در CSV به‌صورت NaN در نظر گرفته شده)  
+- E. coli Average: ابتدا به نزدیک‌ترین عدد صحیح، سپس به دو رقم معنی‌دار رُند می‌شود.
+
+### ADVANCED
+- Phosphate و Nitrate-N در mg/L  
+- Turbidity در NTU/JTU، مقادیر منفی حذف می‌شوند  
+- Streamflow / Discharge در ft²/sec یا cfs،  
+  - اگر <10 → یک رقم اعشار  
+  - اگر ≥10 → عدد صحیح
+
+### RIPARIAN
+- Bank evaluated تکمیل شده باشد  
+- Indicators ارزیابی شده و اگر نه، در Comments توضیح داده شود  
+- Image of site submitted  
+
+این اپ تا جایی که اطلاعات در CSV موجود است، این قواعد را به صورت خودکار اعمال می‌کند.
+مواردی مثل تاریخ انقضای ریجنت‌ها یا توضیح اختلاف در Comments باید بیرون از CSV و به‌صورت دستی بررسی شوند.
+"""
+    )
+
+st.caption("ساخته شده برای کمک به تهیه DSR/WSR با تمیزکاری استاندارد داده‌های کیفیت آب 🌊")
