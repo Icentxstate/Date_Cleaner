@@ -667,7 +667,6 @@ def get_clean_dfs(raw_df):
         "all_param_cols": all_param_cols,
     }
 
-
 # -----------------------------------------------------------------------------
 # 11. UI – TABS
 # -----------------------------------------------------------------------------
@@ -675,6 +674,7 @@ def get_clean_dfs(raw_df):
 tabs = st.tabs(
     [
         "Upload File",
+        "Site ID Description Check",   # NEW TAB
         "GENERAL Validation",
         "CORE Validation",
         "ECOLI Validation",
@@ -712,12 +712,86 @@ if has_data:
     clean_df = clean_context["clean_df"]
     all_param_cols = clean_context["all_param_cols"]
 
-# --- Tab 2: GENERAL Validation ----------------------------------------------
+# --- Tab 2: Site ID Description Check ---------------------------------------
 with tabs[1]:
+    st.subheader(" Site ID – Description Consistency Check")
+
+    if not has_data:
+        st.warning("Please upload a CSV file first in the 'Upload File' tab.")
+    else:
+        raw_df = st.session_state["raw_df"].copy()
+
+        site_col = find_col(raw_df, COLUMN_MAP["site"])
+        if site_col is None:
+            st.error("No Site ID column found based on COLUMN_MAP['site'].")
+        else:
+            def extract_site_id(x):
+                if pd.isna(x):
+                    return None
+                x = str(x)
+                if ":" in x:
+                    return x.split(":", 1)[0].strip()
+                return x.strip()
+
+            def extract_desc(x):
+                if pd.isna(x):
+                    return None
+                x = str(x)
+                if ":" in x:
+                    return x.split(":", 1)[1].strip()
+                return None
+
+            df_desc = raw_df.copy()
+            df_desc["_SiteID"] = df_desc[site_col].apply(extract_site_id)
+            df_desc["_Description"] = df_desc[site_col].apply(extract_desc)
+
+            if df_desc["_Description"].notna().sum() == 0:
+                st.info(
+                    "No explicit descriptions were detected (no 'Site ID: Description' pattern). "
+                    "Nothing to check here."
+                )
+            else:
+                desc_check = (
+                    df_desc.groupby("_SiteID")["_Description"]
+                    .nunique(dropna=True)
+                    .reset_index(name="n_descriptions")
+                )
+
+                problem_sites = desc_check[desc_check["n_descriptions"] > 1]
+
+                if problem_sites.empty:
+                    st.success(" All Site IDs have a single unique description. Safe to continue!")
+                else:
+                    st.error(" Problem Detected: Some Site IDs have multiple descriptions!")
+
+                    st.markdown("###  Sites with inconsistent descriptions:")
+                    st.dataframe(problem_sites)
+
+                    st.markdown(
+                        """
+                        <div style='color:red; font-size:20px; font-weight:bold;'>
+                         It is recommended to stop here — the dataset has inconsistent Site Descriptions.<br>
+                        A single Site ID cannot have multiple different descriptions.
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+
+                    st.markdown("###  Description Details for Each Problematic Site")
+                    detail_table = (
+                        df_desc[df_desc["_SiteID"].isin(problem_sites["_SiteID"])]
+                        .loc[:, ["_SiteID", "_Description"]]
+                        .drop_duplicates()
+                        .sort_values(["_SiteID", "_Description"])
+                    )
+                    st.dataframe(detail_table)
+
+# --- Tab 3: GENERAL Validation ----------------------------------------------
+with tabs[2]:
     st.subheader("GENERAL Validation")
 
     if not has_data:
-        st.warning("First, upload a CSV file in the 'Upload File' tab.")
+        st.warning("Please upload a CSV file first.")
     else:
         st.markdown("### Raw data (sample)")
         st.dataframe(st.session_state["raw_df"].head(20))
@@ -734,12 +808,12 @@ with tabs[1]:
         else:
             st.info("No GENERAL QC columns were generated for this file.")
 
-# --- Tab 3: CORE Validation --------------------------------------------------
-with tabs[2]:
+# --- Tab 4: CORE Validation --------------------------------------------------
+with tabs[3]:
     st.subheader("CORE Validation")
 
     if not has_data:
-        st.warning("First, upload a CSV file in the 'Upload File' tab.")
+        st.warning("Please upload a CSV file first.")
     else:
         core_cols = categories["core"]
         if core_cols:
@@ -754,14 +828,14 @@ with tabs[2]:
             view_cols = core_cols + qc_cols
             st.dataframe(clean_df[view_cols].head(50))
         else:
-            st.warning("No CORE columns found based on COLUMN_MAP.")
+            st.warning("No CORE columns found.")
 
-# --- Tab 4: ECOLI Validation -------------------------------------------------
-with tabs[3]:
+# --- Tab 5: ECOLI Validation -------------------------------------------------
+with tabs[4]:
     st.subheader("ECOLI Validation")
 
     if not has_data:
-        st.warning("First, upload a CSV file in the 'Upload File' tab.")
+        st.warning("Please upload a CSV file first.")
     else:
         ecoli_cols = categories["ecoli"]
         if ecoli_cols:
@@ -772,14 +846,14 @@ with tabs[3]:
             ]
             st.dataframe(clean_df[view_cols].head(50))
         else:
-            st.warning("No ECOLI columns found based on COLUMN_MAP.")
+            st.warning("No ECOLI columns found.")
 
-# --- Tab 5: ADVANCED Validation ---------------------------------------------
-with tabs[4]:
+# --- Tab 6: ADVANCED Validation ---------------------------------------------
+with tabs[5]:
     st.subheader("ADVANCED Validation")
 
     if not has_data:
-        st.warning("First, upload a CSV file in the 'Upload File' tab.")
+        st.warning("Please upload a CSV file first.")
     else:
         adv_cols = categories["advanced"]
         if adv_cols:
@@ -787,14 +861,14 @@ with tabs[4]:
             st.write(adv_cols)
             st.dataframe(clean_df[adv_cols].head(50))
         else:
-            st.warning("No ADVANCED columns found based on COLUMN_MAP.")
+            st.warning("No ADVANCED columns found.")
 
-# --- Tab 6: RIPARIAN Validation ---------------------------------------------
-with tabs[5]:
+# --- Tab 7: RIPARIAN Validation ---------------------------------------------
+with tabs[6]:
     st.subheader("RIPARIAN Validation")
 
     if not has_data:
-        st.warning("First, upload a CSV file in the 'Upload File' tab.")
+        st.warning("Please upload a CSV file first.")
     else:
         rip_cols = categories["riparian"]
         if rip_cols:
@@ -805,14 +879,14 @@ with tabs[5]:
             ]
             st.dataframe(clean_df[view_cols].head(50))
         else:
-            st.warning("No RIPARIAN columns found based on COLUMN_MAP.")
+            st.warning("No RIPARIAN columns found.")
 
-# --- Tab 7: Run All & Exports -----------------------------------------------
-with tabs[6]:
+# --- Tab 8: Run All & Exports -----------------------------------------------
+with tabs[7]:
     st.subheader("Run All & Exports")
 
     if not has_data:
-        st.warning("First, upload a CSV file in the 'Upload File' tab.")
+        st.warning("Please upload a CSV file first.")
     else:
         st.markdown("### DSR Quantity Summary")
         summary = dsr_quantity_summary(clean_df, all_param_cols)
@@ -843,7 +917,7 @@ with tabs[6]:
 
         st.markdown("### Download outputs")
 
-        # 1) Cleaned CSV (no DSR filter)
+        # Cleaned CSV
         buf_clean = io.BytesIO()
         clean_df.to_csv(buf_clean, index=False)
         st.download_button(
@@ -854,7 +928,7 @@ with tabs[6]:
             key="download_clean"
         )
 
-        # 2) DSR-ready CSV (if filter applied)
+        # DSR-ready CSV
         buf_dsr = io.BytesIO()
         dsr_ready_df.to_csv(buf_dsr, index=False)
         st.download_button(
@@ -865,12 +939,12 @@ with tabs[6]:
             key="download_dsr"
         )
 
-# --- Tab 8: Outlier Cleaner (IQR) -------------------------------------------
-with tabs[7]:
+# --- Tab 9: Outlier Cleaner (IQR) -------------------------------------------
+with tabs[8]:
     st.subheader("Outlier Cleaner (IQR)")
 
     if not has_data:
-        st.warning("First, upload a CSV file in the 'Upload File' tab.")
+        st.warning("Please upload a CSV file first.")
     else:
         st.write(
             "Use this section to remove outliers from the cleaned dataset using the IQR rule "
@@ -917,63 +991,51 @@ with tabs[7]:
             else:
                 st.info("Select at least one numeric column to perform outlier cleaning.")
 
-# --- Tab 9: Cleaning Guide ---------------------------------------------------
-with tabs[8]:
+# --- Tab 10: Cleaning Guide --------------------------------------------------
+with tabs[9]:
     st.subheader("Cleaning Guide")
 
     st.markdown(
         """
-This tab summarizes the cleaning rules that this app implements, based on your How-To guide.
+This tab summarizes the cleaning rules implemented by this app.
 
 ### GENERAL
-- Remove data points that fall outside parameter/equipment ranges.  
-- Remove repeat entries or duplicates.  
-- Remove flagged data points.  
-- Ensure a minimum of 3 sites per watershed.  
-- Ensure a minimum of 10 viable monitoring events per parameter type, per site.  
-- Remove extreme outliers (e.g., typical pH is 7.0 and a value of 1.3 is reported).  
-- Ensure sampling was conducted at approximately the same time of day.  
-- Any discrepancies in data are noted or explained in the “Comments” section.  
-- None of the reagents used for testing are expired (this must be checked on field forms / WWDV).  
-- After data have been cleaned, replace entries of “valid” and “invalid” with blank.  
-- Once data have been cleaned, sort data based on Site ID and chronological order.
+- Remove duplicate entries.
+- Replace “valid/invalid” with blanks.
+- Remove physically impossible values.
+- Ensure consistent sampling time of day.
+- Minimum of 3 sites per watershed.
+- Minimum of 10 events per site per parameter.
+- Sort data by site and date after cleaning.
 
 ### CORE
-- Sample Depth is either 0.3 m or half of the Total Depth.  
-- Total Depth can be 0 only if Flow Severity indicates no water (dry).  
-- Dissolved Oxygen: duplicate samples with titration values within 0.5 mg/L; values reported to nearest tenth.  
-- Secchi Transparency: average is correct, reported to two significant figures, and not greater than Total Depth.  
-- Transparency Tube: reported to two significant figures and does not exceed 1.2 m (max report >1.2m).  
-- Conductivity calibration values fall within 20% of calibration standard (not enforced in CSV; for calibration logs).  
-- TDS calculated as TDS = conductivity × 0.65.  
-- Temperature (air/water): reported to nearest tenth, extreme values removed.  
-- pH: reported to nearest tenth; physically unreasonable values removed.
+- Sample depth must be 0.3 m or half of total depth.
+- Total depth = 0 only allowed when Flow Severity indicates no water.
+- DO duplicates must be within 0.5 mg/L.
+- Secchi ≤ Total Depth; report to two significant figures.
+- Transparency Tube ≤ 1.2 m; >1.2m reported as “>1.2m”.
+- TDS = Conductivity × 0.65.
+- pH, temperature, TDS, DO cleaned and range-checked.
 
 ### E. COLI
-- Incubation Temperature between 30–36°C.  
-- Incubation Period between 28–31 hours.  
-- Dilution factor calculations correct (to be checked where available).  
-- Colonies counted < 200 per plate.  
-- Field blank has no colony growth.  
-- Values reported as 0 should be treated as <1 (0 is set to missing in this CSV cleaner).  
-- E. coli Average: first rounded to nearest whole number, then to two significant figures.
+- Incubation Temperature: 30–36°C.
+- Incubation Period: 28–31 hours.
+- Colony Count < 200.
+- Field Blank must show no growth.
+- Zero values treated as <1 and removed.
+- Average: round to whole number → then two significant figures.
 
 ### ADVANCED
-- Phosphate and Nitrate-N recorded in mg/L.  
-- Turbidity recorded in NTU/JTU; negative values removed.  
-- Streamflow / Discharge recorded in ft²/sec or cfs:  
-  - <10 cfs → one decimal place.  
-  - ≥10 cfs → nearest whole number.
+- Turbidity: negative removed.
+- Streamflow: <10 → 1 decimal; ≥10 → whole number.
 
 ### RIPARIAN
-- Bank evaluated is completed.  
-- Indicators are evaluated; if not, explained in the “Comments” section.  
-- Image of site is submitted.  
+- Bank Evaluated flag checked.
+- Image Submitted flag checked.
 
-This app implements all rules that can be inferred directly from the CSV file.
-Items that depend on field paperwork (e.g., reagent expiration dates, detailed comments)
-must still be checked manually outside of this tool.
+This app applies all rules that can be inferred directly from the CSV.
 """
     )
 
-st.caption("Built to support standardized cleaning of water quality data for DSR/WSR workflows 🌊")
+st.caption("Built to support standardized cleaning of water quality data for DSR/WSR workflows ")
+
