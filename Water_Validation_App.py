@@ -960,7 +960,7 @@ with tabs[7]:
         buf_clean = io.BytesIO()
         clean_df.to_csv(buf_clean, index=False)
         st.download_button(
-            label="Download Cleaned CSV",
+            label="Before download check Site ID Description Check  tab- Download Cleaned CSV",
             data=buf_clean.getvalue(),
             file_name="Before download check Site ID Description Check tab - cleaned_data.csv",
             mime="text/csv",
@@ -971,7 +971,7 @@ with tabs[7]:
         buf_dsr = io.BytesIO()
         dsr_ready_df.to_csv(buf_dsr, index=False)
         st.download_button(
-            label="Download DSR-ready CSV",
+            label="Before download check Site ID Description Check  tab- Download DSR-ready CSV",
             data=buf_dsr.getvalue(),
             file_name="Before download check Site ID Description Check tab- cleaned_data_DSR_ready.csv",
             mime="text/csv",
@@ -1023,7 +1023,7 @@ with tabs[8]:
                 st.download_button(
                     label="Download IQR-filtered CSV",
                     data=buf_iqr.getvalue(),
-                    file_name="cleaned_data_IQR_filtered.csv",
+                    file_name="Before download check Site ID Description Check  tab- cleaned_data_IQR_filtered.csv",
                     mime="text/csv",
                     key="download_iqr"
                 )
