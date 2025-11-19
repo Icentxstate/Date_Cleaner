@@ -962,7 +962,7 @@ with tabs[7]:
         st.download_button(
             label="Download Cleaned CSV",
             data=buf_clean.getvalue(),
-            file_name="cleaned_data.csv",
+            file_name="Before download check Site ID Description Check tab - cleaned_data.csv",
             mime="text/csv",
             key="download_clean"
         )
@@ -973,7 +973,7 @@ with tabs[7]:
         st.download_button(
             label="Download DSR-ready CSV",
             data=buf_dsr.getvalue(),
-            file_name="cleaned_data_DSR_ready.csv",
+            file_name="Before download check Site ID Description Check tab- cleaned_data_DSR_ready.csv",
             mime="text/csv",
             key="download_dsr"
         )
