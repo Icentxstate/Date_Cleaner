@@ -712,6 +712,7 @@ if has_data:
     clean_df = clean_context["clean_df"]
     all_param_cols = clean_context["all_param_cols"]
 
+
 # --- Tab 2: Site ID Description Check ---------------------------------------
 with tabs[1]:
     st.subheader(" Site ID – Description Consistency Check")
@@ -721,10 +722,68 @@ with tabs[1]:
     else:
         raw_df = st.session_state["raw_df"].copy()
 
+        # Detect Site ID column
         site_col = find_col(raw_df, COLUMN_MAP["site"])
-        if site_col is None:
-            st.error("No Site ID column found based on COLUMN_MAP['site'].")
+
+        # Detect explicit description column
+        desc_col = None
+        for c in raw_df.columns:
+            if "Description" in c or "Site ID: Description" in c:
+                desc_col = c
+                break
+
+        # CASE 1 — Two separate columns exist (your data)
+        if site_col and desc_col:
+            st.success("Detected separate Site ID and Description columns.")
+
+            df_tmp = raw_df.copy()
+            df_tmp["_SiteID"] = df_tmp[site_col].astype(str).str.strip()
+            df_tmp["_Description"] = df_tmp[desc_col].astype(str).str.strip()
+
+            # Count number of unique descriptions per Site ID
+            desc_check = (
+                df_tmp.groupby("_SiteID")["_Description"]
+                .nunique(dropna=True)
+                .reset_index(name="n_descriptions")
+            )
+
+            problem_sites = desc_check[desc_check["n_descriptions"] > 1]
+
+            if problem_sites.empty:
+                st.success(" All Site IDs have a single unique description. Safe to continue!")
+            else:
+                st.error(" Problem detected – multiple descriptions found for the same Site ID!")
+
+                st.markdown("###  Sites with inconsistent descriptions:")
+                st.dataframe(problem_sites)
+
+                st.markdown(
+                    """
+                    <div style='color:red; font-size:20px; font-weight:bold;'>
+                     It is recommended to stop here — inconsistent Site Descriptions were found.<br>
+                    A single Site ID cannot have multiple different descriptions.
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                # Show all description variants
+                st.markdown("###  Description details for problematic Site IDs")
+                detail_table = (
+                    df_tmp[df_tmp["_SiteID"].isin(problem_sites["_SiteID"])]
+                    .loc[:, ["_SiteID", "_Description"]]
+                    .drop_duplicates()
+                    .sort_values(["_SiteID", "_Description"])
+                )
+                st.dataframe(detail_table)
+
+        # CASE 2 — No description column, check for embedded pattern (ID: Desc)
         else:
+            st.info(
+                "No explicit description column detected. "
+                "Attempting embedded pattern 'SiteID: Description' instead."
+            )
+
             def extract_site_id(x):
                 if pd.isna(x):
                     return None
@@ -747,8 +806,7 @@ with tabs[1]:
 
             if df_desc["_Description"].notna().sum() == 0:
                 st.info(
-                    "No explicit descriptions were detected (no 'Site ID: Description' pattern). "
-                    "Nothing to check here."
+                    "No descriptions detected in embedded format (no 'SiteID: Description')."
                 )
             else:
                 desc_check = (
@@ -760,31 +818,12 @@ with tabs[1]:
                 problem_sites = desc_check[desc_check["n_descriptions"] > 1]
 
                 if problem_sites.empty:
-                    st.success(" All Site IDs have a single unique description. Safe to continue!")
+                    st.success("All Site IDs have consistent descriptions.")
                 else:
-                    st.error(" Problem Detected: Some Site IDs have multiple descriptions!")
-
-                    st.markdown("###  Sites with inconsistent descriptions:")
+                    st.error(
+                        "Multiple descriptions detected for at least one Site ID."
+                    )
                     st.dataframe(problem_sites)
-
-                    st.markdown(
-                        """
-                        <div style='color:red; font-size:20px; font-weight:bold;'>
-                         It is recommended to stop here — the dataset has inconsistent Site Descriptions.<br>
-                        A single Site ID cannot have multiple different descriptions.
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-
-                    st.markdown("###  Description Details for Each Problematic Site")
-                    detail_table = (
-                        df_desc[df_desc["_SiteID"].isin(problem_sites["_SiteID"])]
-                        .loc[:, ["_SiteID", "_Description"]]
-                        .drop_duplicates()
-                        .sort_values(["_SiteID", "_Description"])
-                    )
-                    st.dataframe(detail_table)
 
 # --- Tab 3: GENERAL Validation ----------------------------------------------
 with tabs[2]:
