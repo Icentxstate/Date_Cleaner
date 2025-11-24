@@ -52,7 +52,7 @@ COLUMN_MAP = {
     "valid_flag": ["Validation", "Valid/Invalid", "Data Quality"],
 
     # E. COLI
-    "ecoli_avg": ["E. Coli Average", "E. coli Average"],
+    "ecoli_avg": ["E. Coli Average", "E. coli Average", "E. Coli  Average", "E.coli Average", "E Coli Average"],
     "ecoli_cfu1": ["Sample 1: Colony Forming Units per 100mL"],
     "ecoli_cfu2": ["Sample 2: Colony Forming Units per 100mL"],
     "ecoli_colonies1": ["Sample 1: Colonies Counted"],
