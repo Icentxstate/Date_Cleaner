@@ -1,3 +1,4 @@
+
 # Water_Validation_App.py
 # Streamlit app for automated Water Quality Data Validation (CRP/TST-style)
 
@@ -323,7 +324,6 @@ def clean_core(df):
 
         if tube_mod_col:
             tube_mod = df[tube_mod_col].astype(str)
-            # If original tube >1.2, we mark modifier as >1.2m
             tube_mod = tube_mod.mask(tube.isna() & over_mask, ">1.2m")
             df[tube_mod_col] = tube_mod
 
@@ -352,7 +352,6 @@ def clean_core(df):
     if ph_col:
         ph = pd.to_numeric(df[ph_col], errors="coerce")
         ph = ph.mask((ph < 0) | (ph > 14), np.nan)
-        # Flag extreme pH as NaN (e.g., <2 or >12)
         ph = ph.mask((ph < 2) | (ph > 12), np.nan)
         df[ph_col] = ph.round(1)
 
@@ -401,14 +400,12 @@ def clean_ecoli(df):
     blank_qc_col = find_col(df, COLUMN_MAP["ecoli_blank_qc"])
     optimal_col = find_col(df, COLUMN_MAP["ecoli_optimal_colony"])
 
-    # Remove reported 0 – should be <1 (in CSV we treat 0 as missing)
+    # Remove reported 0 – should be <1
     if ecoli_avg_col:
         ecoli_avg = pd.to_numeric(df[ecoli_avg_col], errors="coerce")
         ecoli_avg = ecoli_avg.mask(ecoli_avg == 0, np.nan)
-        # Step 1: round to nearest whole
         ecoli_avg = ecoli_avg.round(0)
 
-        # Step 2: round that whole number to 2 significant figures
         def round_sig2_int(x):
             if pd.isna(x) or x == 0:
                 return x
@@ -439,7 +436,7 @@ def clean_ecoli(df):
         temp = pd.to_numeric(df[temp_col], errors="coerce")
         df["QC_Ecoli_Temp_30_36"] = (temp >= 30) & (temp <= 36)
 
-    # Incubation period 28–31 hours (if in hours)
+    # Incubation period 28–31 hours
     if hold_col:
         hold = pd.to_numeric(df[hold_col], errors="coerce")
         df["QC_Ecoli_Hold_28_31h"] = (hold >= 28) & (hold <= 31)
@@ -451,7 +448,6 @@ def clean_ecoli(df):
             ["yes", "true", "ok", "no growth", "none"]
         )
 
-    # Optional “optimal colony number” QC (if present)
     if optimal_col:
         df["QC_Ecoli_OptimalColonyFlag"] = df[optimal_col]
 
@@ -468,13 +464,11 @@ def clean_advanced(df):
     turb_col = find_col(df, COLUMN_MAP["turbidity"])
     discharge_col = find_col(df, COLUMN_MAP["discharge"])
 
-    # Turbidity: remove negative values
     if turb_col:
         turb = pd.to_numeric(df[turb_col], errors="coerce")
         turb = turb.mask(turb < 0, np.nan)
         df[turb_col] = turb
 
-    # Discharge rules
     if discharge_col:
         q = pd.to_numeric(df[discharge_col], errors="coerce")
         q = q.mask(q < 0, np.nan)
@@ -512,7 +506,7 @@ def clean_riparian(df):
 
 
 # -----------------------------------------------------------------------------
-# 8. DSR QUANTITY CHECKS
+# 8. DSR QUANTITY CHECKS + EXCLUSION REPORT
 # -----------------------------------------------------------------------------
 
 def dsr_quantity_summary(df, category_cols):
@@ -527,7 +521,6 @@ def dsr_quantity_summary(df, category_cols):
 
     summary = {}
 
-    # 1) watershed -> # sites
     if site_col and watershed_col:
         ws_counts = (
             df.groupby(watershed_col)[site_col]
@@ -546,7 +539,6 @@ def dsr_quantity_summary(df, category_cols):
 
     summary["watershed_site_counts"] = ws_counts
 
-    # 2) #events per site per parameter
     if site_col and param_cols:
         records = []
         for p in param_cols:
@@ -574,25 +566,78 @@ def dsr_quantity_summary(df, category_cols):
     return summary
 
 
+def build_exclusion_report(df, category_cols, min_events=10):
+    """
+    Build a tidy table explaining which site-parameter combos are excluded
+    and why (insufficient valid values).
+
+    Returns:
+        report_df: columns = [SiteID, parameter, n_valid, decision, reason]
+    """
+    site_col = find_col(df, COLUMN_MAP["site"])
+    if not site_col:
+        return pd.DataFrame(columns=["Site", "parameter", "n_valid", "decision", "reason"])
+
+    summary = dsr_quantity_summary(df, category_cols)
+    param_counts = summary["site_param_counts"].copy()
+
+    if param_counts.empty:
+        return pd.DataFrame(columns=[site_col, "parameter", "n_valid", "decision", "reason"])
+
+    param_counts = param_counts.rename(columns={"n_events": "n_valid"})
+    param_counts["decision"] = np.where(param_counts["n_valid"] >= min_events, "KEEP", "EXCLUDE")
+    param_counts["reason"] = np.where(
+        param_counts["decision"] == "EXCLUDE",
+        f"<{min_events} valid values for this parameter at this site",
+        ""
+    )
+
+    return param_counts[[site_col, "parameter", "n_valid", "decision", "reason"]]
+
+
 def filter_dsr_ready(df, category_cols):
     """
-    Filter to site/parameter combos that meet:
-      - >=10 valid events per parameter per site
-      - watershed has >=3 sites (if watershed column exists)
+    Apply DSR filtering:
+      - For all parameters except E. coli → require >=10 valid events
+      - For E. coli → ONLY check the main E. coli average column (Jenna rule)
+      - Watershed must have >=3 sites (if watershed column exists)
+
+    Returns:
+        df_filtered, exclusion_report
     """
     df = df.copy()
     site_col = find_col(df, COLUMN_MAP["site"])
     watershed_col = find_col(df, COLUMN_MAP["watershed"])
 
     if not site_col:
-        return df
+        return df, pd.DataFrame()
+
+    ecoli_avg_col = find_col(df, COLUMN_MAP["ecoli_avg"])
+
+    exclusion_report = build_exclusion_report(df, category_cols, min_events=10)
 
     summary = dsr_quantity_summary(df, category_cols)
     param_counts = summary["site_param_counts"]
-    if param_counts.empty:
-        return df
 
-    good_pairs = param_counts[param_counts["n_events"] >= 10][[site_col, "parameter"]]
+    if param_counts.empty:
+        return df, exclusion_report
+
+    # Non-E. coli parameters filtering
+    if ecoli_avg_col:
+        non_ecoli_counts = param_counts[param_counts["parameter"] != ecoli_avg_col]
+    else:
+        non_ecoli_counts = param_counts
+
+    good_non_ecoli = non_ecoli_counts[non_ecoli_counts["n_events"] >= 10][[site_col, "parameter"]]
+
+    # E. coli filtering ONLY on ecoli_avg
+    if ecoli_avg_col:
+        ecoli_counts = param_counts[param_counts["parameter"] == ecoli_avg_col]
+        good_ecoli = ecoli_counts[ecoli_counts["n_events"] >= 10][[site_col, "parameter"]]
+    else:
+        good_ecoli = pd.DataFrame(columns=[site_col, "parameter"])
+
+    good_pairs = pd.concat([good_non_ecoli, good_ecoli], ignore_index=True)
 
     keep_mask = pd.Series(False, index=df.index)
     for _, row in good_pairs.iterrows():
@@ -614,7 +659,7 @@ def filter_dsr_ready(df, category_cols):
         good_ws = ws_counts[ws_counts["n_sites"] >= 3][watershed_col]
         df_filtered = df_filtered[df_filtered[watershed_col].isin(good_ws)]
 
-    return df_filtered.reset_index(drop=True)
+    return df_filtered.reset_index(drop=True), exclusion_report
 
 
 # -----------------------------------------------------------------------------
@@ -674,7 +719,7 @@ def get_clean_dfs(raw_df):
 tabs = st.tabs(
     [
         "Upload File",
-        "Site ID Description Check",   # NEW TAB
+        "Site ID Description Check",
         "GENERAL Validation",
         "CORE Validation",
         "ECOLI Validation",
@@ -722,17 +767,14 @@ with tabs[1]:
     else:
         raw_df = st.session_state["raw_df"].copy()
 
-        # Detect Site ID column
         site_col = find_col(raw_df, COLUMN_MAP["site"])
 
-        # Detect explicit description column
         desc_col = None
         for c in raw_df.columns:
             if "Description" in c or "Site ID: Description" in c:
                 desc_col = c
                 break
 
-        # CASE 1 — Two separate columns exist (your data)
         if site_col and desc_col:
             st.success("Detected separate Site ID and Description columns.")
 
@@ -740,7 +782,6 @@ with tabs[1]:
             df_tmp["_SiteID"] = df_tmp[site_col].astype(str).str.strip()
             df_tmp["_Description"] = df_tmp[desc_col].astype(str).str.strip()
 
-            # Count number of unique descriptions per Site ID
             desc_check = (
                 df_tmp.groupby("_SiteID")["_Description"]
                 .nunique(dropna=True)
@@ -767,7 +808,6 @@ with tabs[1]:
                     unsafe_allow_html=True
                 )
 
-                # Show all description variants
                 st.markdown("###  Description details for problematic Site IDs")
                 detail_table = (
                     df_tmp[df_tmp["_SiteID"].isin(problem_sites["_SiteID"])]
@@ -777,7 +817,6 @@ with tabs[1]:
                 )
                 st.dataframe(detail_table)
 
-        # CASE 2 — No description column, check for embedded pattern (ID: Desc)
         else:
             st.info(
                 "No explicit description column detected. "
@@ -942,13 +981,18 @@ with tabs[7]:
         )
 
         if apply_dsr_filter:
-            dsr_ready_df = filter_dsr_ready(clean_df, all_param_cols)
+            dsr_ready_df, exclusion_report = filter_dsr_ready(clean_df, all_param_cols)
             st.success(
                 f"Number of DSR-ready rows: {dsr_ready_df.shape[0]} "
                 f"(out of {clean_df.shape[0]} cleaned rows)."
             )
+
+            st.markdown("### Exclusion Report (why site/parameter combos were removed)")
+            st.dataframe(exclusion_report)
+
         else:
             dsr_ready_df = clean_df.copy()
+            exclusion_report = pd.DataFrame()
             st.info("DSR filter is OFF. All cleaned data are included.")
 
         st.markdown("### Preview of fully cleaned data")
@@ -956,7 +1000,6 @@ with tabs[7]:
 
         st.markdown("### Download outputs")
 
-        # Cleaned CSV
         buf_clean = io.BytesIO()
         clean_df.to_csv(buf_clean, index=False)
         st.download_button(
@@ -967,7 +1010,6 @@ with tabs[7]:
             key="download_clean"
         )
 
-        # DSR-ready CSV
         buf_dsr = io.BytesIO()
         dsr_ready_df.to_csv(buf_dsr, index=False)
         st.download_button(
@@ -977,6 +1019,17 @@ with tabs[7]:
             mime="text/csv",
             key="download_dsr"
         )
+
+        if not exclusion_report.empty:
+            buf_excl = io.BytesIO()
+            exclusion_report.to_csv(buf_excl, index=False)
+            st.download_button(
+                label="Download Exclusion Report CSV",
+                data=buf_excl.getvalue(),
+                file_name="DSR_exclusion_report.csv",
+                mime="text/csv",
+                key="download_exclusion"
+            )
 
 # --- Tab 9: Outlier Cleaner (IQR) -------------------------------------------
 with tabs[8]:
@@ -1063,6 +1116,7 @@ This tab summarizes the cleaning rules implemented by this app.
 - Field Blank must show no growth.
 - Zero values treated as <1 and removed.
 - Average: round to whole number → then two significant figures.
+- DSR filter uses ONLY E. coli Average for 10-event rule.
 
 ### ADVANCED
 - Turbidity: negative removed.
@@ -1077,4 +1131,3 @@ This app applies all rules that can be inferred directly from the CSV.
     )
 
 st.caption("Built to support standardized cleaning of water quality data for DSR/WSR workflows ")
-
